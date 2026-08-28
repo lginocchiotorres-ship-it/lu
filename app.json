@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Inspección Seguridad Industrial",
+    "slug": "industrial-safety-inspection",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#0f172a"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "La cámara se usa para inspeccionar áreas y registrar hallazgos de seguridad."
+      }
+    },
+    "android": {
+      "permissions": [
+        "CAMERA"
+      ],
+      "package": "com.example.industrialsafetyinspection"
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
