@@ -5,24 +5,19 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Speech from 'expo-speech';
 import { WORDS, STRATEGIES } from './src/data';
 import { adaptiveOrder, bestStrategy, dueRetention, getStats, strategyScore, createRetentionRecord } from './src/adaptive';
+import { getProgress } from './src/progress';
 import { Answer, LearningData, Strategy, Word } from './src/types';
 
 type Screen = 'home' | 'lesson' | 'result' | 'retention' | 'profile';
 type LessonWord = Word & { strategy: Strategy };
-
 const STORAGE_KEY = '@lu_learning_data_v4';
-const STRATEGY_KEYS: Strategy[] = ['context', 'audio', 'retrieval'];
 const emptyData = (): LearningData => ({ sessions: [], retention: [] });
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 function makeOptions(current: Word) {
-  const distractors = WORDS.filter((word) => word.id !== current.id).slice(0, 3).map((word) => word.word);
-  return [current.word, ...distractors].sort(() => Math.random() - 0.5);
+  return [current.word, ...WORDS.filter((w) => w.id !== current.id).slice(0, 3).map((w) => w.word)].sort(() => Math.random() - 0.5);
 }
-
-function percent(value: number) {
-  return `${Math.round(value * 100)}%`;
-}
+function pct(value: number) { return `${Math.round(value * 100)}%`; }
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('home');
@@ -33,358 +28,81 @@ export default function App() {
   const [answers, setAnswers] = useState<Answer[]>([]);
   const [attempts, setAttempts] = useState(0);
   const [hints, setHints] = useState(0);
-  const [questionStartedAt, setQuestionStartedAt] = useState(0);
+  const [startedAt, setStartedAt] = useState(0);
   const [sessionId, setSessionId] = useState('');
   const [retentionSessionId, setRetentionSessionId] = useState<string | null>(null);
   const [retentionIndex, setRetentionIndex] = useState(0);
   const [retentionAnswers, setRetentionAnswers] = useState<Answer[]>([]);
 
-  useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then((raw) => {
-      if (!raw) return;
-      try { setData(JSON.parse(raw)); } catch { setData(emptyData()); }
-    });
-  }, []);
-
-  async function persist(next: LearningData) {
-    setData(next);
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  }
+  useEffect(() => { AsyncStorage.getItem(STORAGE_KEY).then((raw) => { if (raw) { try { setData(JSON.parse(raw)); } catch { setData(emptyData()); } } }); }, []);
+  async function persist(next: LearningData) { setData(next); await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)); }
 
   const current = lesson[index];
   const options = useMemo(() => current ? makeOptions(current) : [], [current?.id]);
   const pendingRetention = dueRetention(data);
   const stats = getStats(data);
   const best = bestStrategy(data);
+  const progress = getProgress(data);
 
   function startLesson() {
-    const order = adaptiveOrder(data);
     const selectedWords = WORDS.slice(0, 5);
-    const nextLesson = order.flatMap((strategy) => selectedWords.map((word) => ({ ...word, strategy })));
-    setLesson(nextLesson);
-    setIndex(0);
-    setSelected(null);
-    setAnswers([]);
-    setAttempts(0);
-    setHints(0);
-    setSessionId(makeId());
-    setQuestionStartedAt(Date.now());
-    setScreen('lesson');
+    const nextLesson = adaptiveOrder(data).flatMap((strategy) => selectedWords.map((word) => ({ ...word, strategy })));
+    setLesson(nextLesson); setIndex(0); setSelected(null); setAnswers([]); setAttempts(0); setHints(0); setSessionId(makeId()); setStartedAt(Date.now()); setScreen('lesson');
   }
-
   function answer(value: string) {
     if (!current || selected) return;
-    const correct = value === current.word;
-    const nextAttempts = attempts + 1;
-    const answerRecord: Answer = {
-      wordId: current.id,
-      strategy: current.strategy,
-      correct,
-      responseMs: Date.now() - questionStartedAt,
-      attempts: nextAttempts,
-      hints,
-    };
-    setAttempts(nextAttempts);
-    setSelected(value);
-    setAnswers((previous) => [...previous, answerRecord]);
+    const record: Answer = { wordId: current.id, strategy: current.strategy, correct: value === current.word, responseMs: Date.now() - startedAt, attempts: attempts + 1, hints };
+    setAttempts(attempts + 1); setSelected(value); setAnswers((old) => [...old, record]);
   }
-
-  function useHint() {
-    if (!current || selected) return;
-    setHints((value) => value + 1);
-  }
-
+  function useHint() { if (!selected) setHints((v) => v + 1); }
   async function nextQuestion() {
     if (!selected || !current) return;
-    if (index < lesson.length - 1) {
-      setIndex((value) => value + 1);
-      setSelected(null);
-      setAttempts(0);
-      setHints(0);
-      setQuestionStartedAt(Date.now());
-      return;
-    }
-    await finishLesson(answers);
-  }
-
-  async function finishLesson(finalAnswers: Answer[]) {
+    if (index < lesson.length - 1) { setIndex(index + 1); setSelected(null); setAttempts(0); setHints(0); setStartedAt(Date.now()); return; }
     const createdAt = Date.now();
-    const session = { id: sessionId, createdAt, answers: finalAnswers };
-    const nextData: LearningData = {
-      ...data,
-      sessions: [...data.sessions, session],
-      retention: [
-        ...data.retention,
-        createRetentionRecord(session.id, createdAt, 24),
-        createRetentionRecord(session.id, createdAt, 168),
-      ],
-    };
-    await persist(nextData);
+    const session = { id: sessionId, createdAt, answers };
+    await persist({ ...data, sessions: [...data.sessions, session], retention: [...data.retention, createRetentionRecord(session.id, createdAt, 24), createRetentionRecord(session.id, createdAt, 168)] });
     setScreen('result');
   }
-
-  function beginRetention(sessionToMeasure: string) {
-    setRetentionSessionId(sessionToMeasure);
-    setRetentionIndex(0);
-    setRetentionAnswers([]);
-    setScreen('retention');
-  }
-
-  function retentionWords(sessionToMeasure: string) {
-    const session = data.sessions.find((item) => item.id === sessionToMeasure);
-    if (!session) return [];
-    return session.answers.map((answerRecord) => {
-      const word = WORDS.find((item) => item.id === answerRecord.wordId);
-      return word ? ({ ...word, strategy: answerRecord.strategy } as LessonWord) : null;
-    }).filter(Boolean) as LessonWord[];
-  }
-
-  async function answerRetention(value: string, item: LessonWord) {
-    if (retentionAnswers.length > retentionIndex) return;
-    const answerRecord: Answer = {
-      wordId: item.id,
-      strategy: item.strategy,
-      correct: value === item.word,
-      responseMs: 0,
-      attempts: 1,
-      hints: 0,
-    };
-    setRetentionAnswers((previous) => [...previous, answerRecord]);
-  }
-
-  async function finishRetention(finalAnswers: Answer[]) {
+  function retentionWords(session: string) { const s = data.sessions.find((x) => x.id === session); return s ? s.answers.map((a) => { const w = WORDS.find((x) => x.id === a.wordId); return w ? ({ ...w, strategy: a.strategy } as LessonWord) : null; }).filter(Boolean) as LessonWord[] : []; }
+  function beginRetention(session: string) { setRetentionSessionId(session); setRetentionIndex(0); setRetentionAnswers([]); setScreen('retention'); }
+  function answerRetention(value: string, item: LessonWord) { if (retentionAnswers.length > retentionIndex) return; setRetentionAnswers((old) => [...old, { wordId: item.id, strategy: item.strategy, correct: value === item.word, responseMs: 0, attempts: 1, hints: 0 }]); }
+  async function finishRetention() {
     if (!retentionSessionId) return;
-    const target = data.retention.find((record) => record.sessionId === retentionSessionId && record.completedAt === null && record.dueAt <= Date.now());
+    const target = data.retention.find((r) => r.sessionId === retentionSessionId && r.completedAt === null && r.dueAt <= Date.now());
     if (!target) return;
-    const completedAt = Date.now();
-    const updatedRetention = data.retention.map((record) => {
-      if (record.sessionId === retentionSessionId && record.horizon === target.horizon) {
-        return { ...record, completedAt, answers: finalAnswers };
-      }
-      return record;
-    });
-    await persist({ ...data, retention: updatedRetention });
-    setScreen('home');
+    const updated = data.retention.map((r) => r.sessionId === retentionSessionId && r.horizon === target.horizon ? { ...r, completedAt: Date.now(), answers: retentionAnswers } : r);
+    await persist({ ...data, retention: updated }); setScreen('home');
   }
 
-  if (screen === 'home') {
-    const completed = data.sessions.length;
-    return (
-      <SafeAreaView style={styles.safe}>
-        <StatusBar style="dark" />
-        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-          <View style={styles.header}>
-            <View>
-              <Text style={styles.logo}>LÜ</Text>
-              <Text style={styles.logoSub}>LANGUAGE INTELLIGENCE</Text>
-            </View>
-            <TouchableOpacity style={styles.profileChip} onPress={() => setScreen('profile')}>
-              <Text style={styles.profileChipText}>Mi perfil</Text>
-            </TouchableOpacity>
-          </View>
+  if (screen === 'home') return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+    <View style={styles.header}><View><Text style={styles.logo}>LÜ</Text><Text style={styles.logoSub}>LANGUAGE INTELLIGENCE</Text></View><TouchableOpacity style={styles.profileChip} onPress={() => setScreen('profile')}><Text style={styles.profileChipText}>Mi progreso</Text></TouchableOpacity></View>
+    <View style={styles.hero}><View style={styles.moonBadge}><Text style={styles.moon}>☾</Text></View><Text style={styles.eyebrow}>TU VIAJE DE APRENDIZAJE</Text><Text style={styles.title}>Descubre cómo aprendes idiomas.</Text><Text style={styles.description}>LÜ prueba estrategias, mide tu retención y adapta tu entrenamiento con tu propia evidencia.</Text></View>
 
-          <View style={styles.hero}>
-            <View style={styles.moonBadge}><Text style={styles.moon}>☾</Text></View>
-            <Text style={styles.eyebrow}>ENTRENAMIENTO ADAPTATIVO</Text>
-            <Text style={styles.title}>Descubre cómo aprendes idiomas.</Text>
-            <Text style={styles.description}>LÜ prueba distintas estrategias, mide tu retención y aprende qué funciona mejor para ti.</Text>
-          </View>
+    <View style={styles.progressCard}><View style={styles.progressTop}><View><Text style={styles.smallPurple}>NIVEL {progress.level}</Text><Text style={styles.levelTitle}>{progress.levelTitle}</Text></View><Text style={styles.xp}>{progress.xp} XP</Text></View><View style={styles.levelTrack}><View style={[styles.levelFill, { width: `${progress.levelProgress * 100}%` }]} /></View><Text style={styles.levelCaption}>{progress.level === 6 ? 'Nivel máximo del MVP ✦' : `${Math.max(0, progress.nextLevelXp - progress.xp)} XP para el siguiente nivel`}</Text></View>
 
-          {pendingRetention && (
-            <TouchableOpacity style={styles.retentionCard} onPress={() => beginRetention(pendingRetention.sessionId)}>
-              <View style={styles.cardIcon}><Text style={styles.cardIconText}>↗</Text></View>
-              <View style={styles.flex}><Text style={styles.cardTitle}>{pendingRetention.horizon === 24 ? 'Medición de 24 horas' : 'Medición de 7 días'}</Text><Text style={styles.cardText}>Tu recuerdo está listo para ser medido.</Text></View>
-              <Text style={styles.arrow}>›</Text>
-            </TouchableOpacity>
-          )}
+    <View style={styles.miniGrid}><View style={styles.miniCard}><Text style={styles.miniIcon}>🔥</Text><Text style={styles.miniValue}>{progress.streak}</Text><Text style={styles.miniLabel}>días de racha</Text></View><View style={styles.miniCard}><Text style={styles.miniIcon}>🧠</Text><Text style={styles.miniValue}>{progress.wordsMastered}</Text><Text style={styles.miniLabel}>palabras recordadas</Text></View><View style={styles.miniCard}><Text style={styles.miniIcon}>✦</Text><Text style={styles.miniValue}>{progress.sessions}</Text><Text style={styles.miniLabel}>sesiones</Text></View></View>
 
-          <View style={styles.mainCard}>
-            <View style={styles.cardHeader}>
-              <View><Text style={styles.cardTitle}>Español → Inglés</Text><Text style={styles.muted}>Experimento activo</Text></View>
-              <View style={styles.levelBadge}><Text style={styles.levelText}>MVP</Text></View>
-            </View>
-            <View style={styles.statsRow}>
-              <View><Text style={styles.stat}>{completed}</Text><Text style={styles.label}>sesiones</Text></View>
-              <View><Text style={styles.stat}>3</Text><Text style={styles.label}>estrategias</Text></View>
-              <View><Text style={styles.stat}>{data.retention.filter((r) => r.completedAt).length}</Text><Text style={styles.label}>retenciones</Text></View>
-            </View>
-          </View>
+    {pendingRetention && <TouchableOpacity style={styles.retentionCard} onPress={() => beginRetention(pendingRetention.sessionId)}><View style={styles.retentionIcon}><Text>↗</Text></View><View style={styles.flex}><Text style={styles.cardTitle}>{pendingRetention.horizon === 24 ? 'Medición de 24 horas' : 'Medición de 7 días'}</Text><Text style={styles.cardText}>Completa la prueba para ganar progreso y medir tu memoria.</Text></View><Text style={styles.arrow}>›</Text></TouchableOpacity>}
 
-          {best && (
-            <View style={styles.signalCard}>
-              <Text style={styles.signalEyebrow}>TU SEÑAL ACTUAL</Text>
-              <Text style={styles.signalTitle}>{STRATEGIES.find((item) => item.key === best)?.title}</Text>
-              <Text style={styles.cardText}>La estrategia con mejor evidencia acumulada.</Text>
-            </View>
-          )}
+    <View style={styles.mainCard}><View style={styles.cardHeader}><View><Text style={styles.cardTitle}>Español → Inglés</Text><Text style={styles.muted}>Experimento adaptativo</Text></View><View style={styles.levelBadge}><Text style={styles.levelText}>MVP</Text></View></View><View style={styles.statsRow}><View><Text style={styles.stat}>{progress.sessions}</Text><Text style={styles.label}>sesiones</Text></View><View><Text style={styles.stat}>3</Text><Text style={styles.label}>estrategias</Text></View><View><Text style={styles.stat}>{progress.retentionCompleted}</Text><Text style={styles.label}>retenciones</Text></View></View></View>
 
-          <Text style={styles.sectionTitle}>Así funciona LÜ</Text>
-          {STRATEGIES.map((strategy, i) => (
-            <View style={styles.strategy} key={strategy.key}>
-              <View style={styles.number}><Text style={styles.numberText}>{i + 1}</Text></View>
-              <View style={styles.strategyBody}><Text style={styles.strategyTitle}>{strategy.icon} {strategy.title}</Text><Text style={styles.strategyText}>{strategy.subtitle}</Text></View>
-            </View>
-          ))}
+    {best && <View style={styles.signalCard}><Text style={styles.signalEyebrow}>TU SEÑAL ACTUAL</Text><Text style={styles.signalTitle}>{STRATEGIES.find((s) => s.key === best)?.title}</Text><Text style={styles.cardText}>La estrategia con mejor evidencia acumulada. LÜ no te etiqueta: aprende de tus resultados.</Text></View>}
 
-          <TouchableOpacity style={styles.primary} onPress={startLesson}>
-            <Text style={styles.primaryText}>{completed ? 'Continuar entrenando' : 'Comenzar experimento'}</Text>
-            <Text style={styles.primaryArrow}>→</Text>
-          </TouchableOpacity>
-          <Text style={styles.footer}>Tu perfil se construye con evidencia de rendimiento, no con etiquetas de “estilo de aprendizaje”.</Text>
-        </ScrollView>
-      </SafeAreaView>
-    );
-  }
+    <Text style={styles.sectionTitle}>Lo que vas ganando</Text><View style={styles.rewardRow}><View style={styles.rewardIcon}><Text>💜</Text></View><View style={styles.flex}><Text style={styles.strategyTitle}>Experiencia</Text><Text style={styles.strategyText}>Gana XP al practicar y demostrar retención.</Text></View></View><View style={styles.rewardRow}><View style={styles.rewardIcon}><Text>🔥</Text></View><View style={styles.flex}><Text style={styles.strategyTitle}>Racha</Text><Text style={styles.strategyText}>Mantén sesiones en días consecutivos.</Text></View></View><View style={styles.rewardRow}><View style={styles.rewardIcon}><Text>🏆</Text></View><View style={styles.flex}><Text style={styles.strategyTitle}>Logros</Text><Text style={styles.strategyText}>Desbloquea insignias por hitos reales de aprendizaje.</Text></View></View>
 
-  if (screen === 'lesson' && current) {
-    const strategy = STRATEGIES.find((item) => item.key === current.strategy)!;
-    const isContext = current.strategy === 'context';
-    const isAudio = current.strategy === 'audio';
-    const isRetrieval = current.strategy === 'retrieval';
-    const answeredCorrectly = selected === current.word;
-    return (
-      <SafeAreaView style={styles.safe}>
-        <StatusBar style="dark" />
-        <View style={styles.lessonContainer}>
-          <View style={styles.topRow}><Text style={styles.logoSmall}>LÜ</Text><Text style={styles.progress}>{index + 1} / {lesson.length}</Text></View>
-          <View style={styles.progressBar}><View style={[styles.progressFill, { width: `${((index + 1) / lesson.length) * 100}%` }]} /></View>
-          <View style={styles.strategyPill}><Text style={styles.strategyPillText}>{strategy.icon} {strategy.title.toUpperCase()}</Text></View>
+    <Text style={styles.sectionTitle}>Así funciona LÜ</Text>{STRATEGIES.map((s, i) => <View style={styles.strategy} key={s.key}><View style={styles.number}><Text style={styles.numberText}>{i + 1}</Text></View><View style={styles.strategyBody}><Text style={styles.strategyTitle}>{s.icon} {s.title}</Text><Text style={styles.strategyText}>{s.subtitle}</Text></View></View>)}
+    <TouchableOpacity style={styles.primary} onPress={startLesson}><Text style={styles.primaryText}>{progress.sessions ? 'Continuar entrenando' : 'Comenzar experimento'}</Text><Text style={styles.primaryArrow}>→</Text></TouchableOpacity><Text style={styles.footer}>El progreso recompensa práctica y memoria demostrada, no una supuesta etiqueta de “estilo de aprendizaje”.</Text>
+  </ScrollView></SafeAreaView>;
 
-          {isContext && <View style={styles.contextBox}><Text style={styles.contextLabel}>EN CONTEXTO</Text><Text style={styles.contextText}>{current.context.replace(current.word, '_____')}</Text></View>}
-          {isAudio && <View style={styles.audioBox}><View style={styles.audioCircle}><Text style={styles.audioSymbol}>♪</Text></View><Text style={styles.audioTitle}>Escucha y recupera</Text><TouchableOpacity style={styles.audioButton} onPress={() => Speech.speak(current.word, { language: 'en-US', rate: 0.82 })}><Text style={styles.audioButtonText}>▶  Reproducir palabra</Text></TouchableOpacity><Text style={styles.audioHint}>Puedes escucharla antes de responder.</Text></View>}
-          {isRetrieval && <View style={styles.retrievalBox}><Text style={styles.contextLabel}>SIN PISTAS</Text><Text style={styles.bigSpanish}>{current.translation}</Text><Text style={styles.retrievalText}>Recupera la palabra en inglés desde tu memoria.</Text></View>}
+  if (screen === 'lesson' && current) { const strategy = STRATEGIES.find((s) => s.key === current.strategy)!; const isContext = current.strategy === 'context'; const isAudio = current.strategy === 'audio'; const correct = selected === current.word; return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><View style={styles.lessonContainer}><View style={styles.topRow}><Text style={styles.logoSmall}>LÜ</Text><Text style={styles.progress}>{index + 1} / {lesson.length}</Text></View><View style={styles.progressBar}><View style={[styles.progressFill, { width: `${((index + 1) / lesson.length) * 100}%` }]} /></View><View style={styles.strategyPill}><Text style={styles.strategyPillText}>{strategy.icon} {strategy.title.toUpperCase()}</Text></View>{isContext && <View style={styles.contextBox}><Text style={styles.contextLabel}>EN CONTEXTO</Text><Text style={styles.contextText}>{current.context.replace(current.word, '_____')}</Text></View>}{isAudio && <View style={styles.audioBox}><View style={styles.audioCircle}><Text style={styles.audioSymbol}>♪</Text></View><Text style={styles.audioTitle}>Escucha y recupera</Text><TouchableOpacity style={styles.audioButton} onPress={() => Speech.speak(current.word, { language: 'en-US', rate: 0.82 })}><Text style={styles.audioButtonText}>▶ Reproducir palabra</Text></TouchableOpacity><Text style={styles.audioHint}>Puedes escucharla antes de responder.</Text></View>}{!isContext && !isAudio && <View style={styles.retrievalBox}><Text style={styles.contextLabel}>SIN PISTAS</Text><Text style={styles.bigSpanish}>{current.translation}</Text><Text style={styles.retrievalText}>Recupera la palabra en inglés desde tu memoria.</Text></View>}<Text style={styles.question}>{isAudio ? '¿Qué palabra escuchaste?' : isContext ? '¿Qué palabra completa la situación?' : '¿Qué palabra recuerdas?'}</Text><View style={styles.options}>{options.map((option) => { const isCorrect = option === current.word; const chosen = selected === option; return <TouchableOpacity key={option} disabled={!!selected} onPress={() => answer(option)} style={[styles.option, chosen && (isCorrect ? styles.correct : styles.wrong), selected && isCorrect && styles.correct]}><Text style={[styles.optionText, selected && isCorrect && styles.correctText]}>{option}</Text></TouchableOpacity>; })}</View>{!selected && <TouchableOpacity onPress={useHint} style={styles.hint}><Text style={styles.hintText}>💡 {hints ? `Pista usada (${hints})` : 'Usar una pista'}</Text></TouchableOpacity>}{hints > 0 && !selected && <Text style={styles.hintDetail}>Empieza con “{current.word[0]}”.</Text>}{selected && <View style={[styles.feedback, correct ? styles.feedbackGood : styles.feedbackNeutral]}><Text style={styles.feedbackTitle}>{correct ? '✓ Correcto' : `La respuesta era “${current.word}”`}</Text><Text style={styles.feedbackText}>{current.example}</Text></View>}<View style={styles.bottom}><Text style={styles.progressText}>{strategy.title} · dificultad {current.difficulty}/3</Text><TouchableOpacity disabled={!selected} style={[styles.primary, !selected && styles.disabled]} onPress={nextQuestion}><Text style={styles.primaryText}>{index === lesson.length - 1 ? 'Terminar sesión' : 'Continuar'}</Text><Text style={styles.primaryArrow}>→</Text></TouchableOpacity></View></View></SafeAreaView>; }
 
-          <Text style={styles.question}>{isRetrieval ? '¿Qué palabra recuerdas?' : isAudio ? '¿Qué palabra escuchaste?' : '¿Qué palabra completa la situación?'}</Text>
-          <View style={styles.options}>{options.map((option) => {
-            const correct = option === current.word;
-            const chosen = selected === option;
-            return <TouchableOpacity key={option} disabled={!!selected} onPress={() => answer(option)} style={[styles.option, chosen && (correct ? styles.correct : styles.wrong), selected && correct && styles.correct]}><Text style={[styles.optionText, selected && correct && styles.correctText]}>{option}</Text></TouchableOpacity>;
-          })}</View>
+  if (screen === 'result') { const last = data.sessions[data.sessions.length - 1]; const score = last?.answers.filter((a) => a.correct).length ?? 0; const total = last?.answers.length ?? 0; return <SafeAreaView style={styles.safe}><View style={styles.resultContainer}><View style={styles.resultIcon}><Text style={styles.resultStar}>✦</Text></View><Text style={styles.eyebrow}>SESIÓN COMPLETADA</Text><Text style={styles.title}>¡Ganaste experiencia!</Text><Text style={styles.resultXp}>+{score * 5 + 10} XP</Text><View style={styles.scoreCircle}><Text style={styles.score}>{score}/{total}</Text><Text style={styles.label}>aciertos</Text></View><View style={styles.mainCard}><Text style={styles.cardTitle}>Ahora medimos lo importante.</Text><Text style={styles.cardText}>LÜ volverá a evaluarte a las 24 horas y a los 7 días. La memoria demostrada hará crecer tu progreso.</Text></View><TouchableOpacity style={styles.primary} onPress={() => setScreen('home')}><Text style={styles.primaryText}>Ver mi progreso</Text><Text style={styles.primaryArrow}>→</Text></TouchableOpacity></View></SafeAreaView>; }
 
-          {!selected && <TouchableOpacity onPress={useHint} style={styles.hint}><Text style={styles.hintText}>💡 {hints ? `Pista usada (${hints})` : 'Usar una pista'}</Text></TouchableOpacity>}
-          {hints > 0 && !selected && <Text style={styles.hintDetail}>Empieza con “{current.word[0]}”.</Text>}
-          {selected && <View style={[styles.feedback, answeredCorrectly ? styles.feedbackGood : styles.feedbackNeutral]}><Text style={styles.feedbackTitle}>{answeredCorrectly ? '✓ Correcto' : `La respuesta era “${current.word}”`}</Text><Text style={styles.feedbackText}>{current.example}</Text></View>}
+  if (screen === 'retention') { const record = data.retention.find((r) => r.sessionId === retentionSessionId && r.completedAt === null && r.dueAt <= Date.now()); const words = record ? retentionWords(record.sessionId) : []; const item = words[retentionIndex]; if (!item || !record) return <SafeAreaView style={styles.safe}><View style={styles.resultContainer}><Text style={styles.title}>No hay medición pendiente.</Text><TouchableOpacity style={styles.primary} onPress={() => setScreen('home')}><Text style={styles.primaryText}>Volver</Text></TouchableOpacity></View></SafeAreaView>; const answered = retentionAnswers.length > retentionIndex; const rOptions = makeOptions(item); return <SafeAreaView style={styles.safe}><View style={styles.lessonContainer}><Text style={styles.eyebrow}>RETENCIÓN · {record.horizon === 24 ? '24 HORAS' : '7 DÍAS'}</Text><View style={styles.retentionProgress}><Text style={styles.retentionProgressText}>{retentionIndex + 1} / {words.length}</Text><View style={styles.progressBar}><View style={[styles.progressFill, { width: `${((retentionIndex + 1) / words.length) * 100}%` }]} /></View></View><Text style={styles.lessonTitle}>¿Qué recuerdas sin volver a estudiar?</Text><View style={styles.retrievalBox}><Text style={styles.contextLabel}>RECUERDA</Text><Text style={styles.bigSpanish}>{item.translation}</Text></View><View style={styles.options}>{rOptions.map((option) => <TouchableOpacity key={option} disabled={answered} onPress={() => answerRetention(option, item)} style={[styles.option, answered && option === item.word && styles.correct]}><Text style={styles.optionText}>{option}</Text></TouchableOpacity>)}</View>{answered && <View style={styles.feedback}><Text style={styles.feedbackTitle}>{retentionAnswers[retentionIndex]?.correct ? '✓ Memoria demostrada' : `La respuesta era “${item.word}”`}</Text><Text style={styles.feedbackText}>Esta medición ayuda a LÜ a comparar estrategias.</Text></View>}<View style={styles.bottom}><TouchableOpacity disabled={!answered} style={[styles.primary, !answered && styles.disabled]} onPress={async () => { if (retentionIndex < words.length - 1) setRetentionIndex(retentionIndex + 1); else await finishRetention(); }}><Text style={styles.primaryText}>{retentionIndex === words.length - 1 ? 'Guardar y ganar progreso' : 'Continuar'}</Text><Text style={styles.primaryArrow}>→</Text></TouchableOpacity></View></View></SafeAreaView>; }
 
-          <View style={styles.bottom}><Text style={styles.progressText}>{strategy.title} · dificultad {current.difficulty}/3</Text><TouchableOpacity disabled={!selected} style={[styles.primary, !selected && styles.disabled]} onPress={nextQuestion}><Text style={styles.primaryText}>{index === lesson.length - 1 ? 'Terminar sesión' : 'Continuar'}</Text><Text style={styles.primaryArrow}>→</Text></TouchableOpacity></View>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (screen === 'result') {
-    const last = data.sessions[data.sessions.length - 1];
-    const score = last?.answers.filter((item) => item.correct).length ?? 0;
-    const total = last?.answers.length ?? 0;
-    return <SafeAreaView style={styles.safe}><View style={styles.resultContainer}><View style={styles.resultIcon}><Text style={styles.resultStar}>✦</Text></View><Text style={styles.eyebrow}>SESIÓN COMPLETADA</Text><Text style={styles.title}>Nueva evidencia para LÜ.</Text><View style={styles.scoreCircle}><Text style={styles.score}>{score}/{total}</Text><Text style={styles.label}>aciertos</Text></View><View style={styles.mainCard}><Text style={styles.cardTitle}>Ahora medimos lo importante.</Text><Text style={styles.cardText}>LÜ te volverá a evaluar a las 24 horas y a los 7 días para saber qué estrategia produce mejor retención.</Text></View><TouchableOpacity style={styles.primary} onPress={() => setScreen('home')}><Text style={styles.primaryText}>Volver al inicio</Text><Text style={styles.primaryArrow}>→</Text></TouchableOpacity></View></SafeAreaView>;
-  }
-
-  if (screen === 'retention') {
-    const record = data.retention.find((item) => item.sessionId === retentionSessionId && item.completedAt === null && item.dueAt <= Date.now());
-    const words = record ? retentionWords(record.sessionId) : [];
-    const item = words[retentionIndex];
-    if (!item || !record) return <SafeAreaView style={styles.safe}><View style={styles.resultContainer}><Text style={styles.title}>No hay medición pendiente.</Text><TouchableOpacity style={styles.primary} onPress={() => setScreen('home')}><Text style={styles.primaryText}>Volver</Text></TouchableOpacity></View></SafeAreaView>;
-    const alreadyAnswered = retentionAnswers.length > retentionIndex;
-    const retentionOptions = makeOptions(item);
-    return <SafeAreaView style={styles.safe}><View style={styles.lessonContainer}><Text style={styles.eyebrow}>RETENCIÓN · {record.horizon === 24 ? '24 HORAS' : '7 DÍAS'}</Text><Text style={styles.lessonTitle}>¿Qué recuerdas sin volver a estudiar?</Text><View style={styles.retrievalBox}><Text style={styles.contextLabel}>PALABRA EN ESPAÑOL</Text><Text style={styles.bigSpanish}>{item.translation}</Text></View><Text style={styles.question}>Selecciona la palabra que recuerdes.</Text><View style={styles.options}>{retentionOptions.map((option) => { const correct = option === item.word; const chosen = alreadyAnswered && retentionAnswers[retentionIndex]?.correct === correct && correct; return <TouchableOpacity key={option} disabled={alreadyAnswered} onPress={() => answerRetention(option, item)} style={[styles.option, alreadyAnswered && correct && styles.correct, alreadyAnswered && chosen && !correct && styles.wrong]}><Text style={styles.optionText}>{option}</Text></TouchableOpacity>; })}</View>{alreadyAnswered && <View style={styles.feedback}><Text style={styles.feedbackTitle}>{retentionAnswers[retentionIndex]?.correct ? '✓ Recordaste la palabra' : `La respuesta era “${item.word}”`}</Text><Text style={styles.feedbackText}>Esta respuesta se atribuye a la estrategia con la que aprendiste el término.</Text></View>}<View style={styles.bottom}><Text style={styles.progressText}>{retentionIndex + 1}/{words.length}</Text><TouchableOpacity disabled={!alreadyAnswered} style={[styles.primary, !alreadyAnswered && styles.disabled]} onPress={() => { if (retentionIndex < words.length - 1) { setRetentionIndex((value) => value + 1); } else { finishRetention(retentionAnswers); } }}><Text style={styles.primaryText}>{retentionIndex === words.length - 1 ? 'Guardar medición' : 'Continuar'}</Text><Text style={styles.primaryArrow}>→</Text></TouchableOpacity></View></View></SafeAreaView>;
-  }
-
-  return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.container}><TouchableOpacity onPress={() => setScreen('home')}><Text style={styles.back}>← Inicio</Text></TouchableOpacity><Text style={styles.eyebrow}>PERFIL DE EVIDENCIA</Text><Text style={styles.title}>Tu aprendizaje, medido.</Text><Text style={styles.description}>Estas señales son hipótesis basadas en tus datos actuales, no etiquetas permanentes.</Text>{STRATEGY_KEYS.map((key) => { const value = strategyScore(stats[key]); const immediate = stats[key].attempts ? stats[key].correct / stats[key].attempts : 0; const r24 = stats[key].retention24Total ? stats[key].retention24Correct / stats[key].retention24Total : null; const r7 = stats[key].retention7Total ? stats[key].retention7Correct / stats[key].retention7Total : null; return <View style={styles.profileCard} key={key}><View style={styles.cardHeader}><Text style={styles.cardTitle}>{STRATEGIES.find((item) => item.key === key)?.title}</Text><Text style={styles.profileScore}>{Math.round(value)}</Text></View><View style={styles.scoreBar}><View style={[styles.scoreBarFill, { width: `${value}%` }]} /></View><View style={styles.profileMetrics}><Text style={styles.metric}>Inmediato <Text style={styles.metricStrong}>{stats[key].attempts ? percent(immediate) : '—'}</Text></Text><Text style={styles.metric}>24 h <Text style={styles.metricStrong}>{r24 === null ? '—' : percent(r24)}</Text></Text><Text style={styles.metric}>7 d <Text style={styles.metricStrong}>{r7 === null ? '—' : percent(r7)}</Text></Text></View></View>; })}<View style={styles.mainCard}><Text style={styles.cardTitle}>¿Qué significa?</Text><Text style={styles.cardText}>LÜ combina rendimiento inmediato, velocidad, pistas y, sobre todo, retención para actualizar tu orden de entrenamiento.</Text></View></ScrollView></SafeAreaView>;
+  return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}><TouchableOpacity onPress={() => setScreen('home')}><Text style={styles.back}>← Inicio</Text></TouchableOpacity><Text style={styles.eyebrow}>MI PROGRESO</Text><Text style={styles.title}>Tu viaje con LÜ.</Text><View style={styles.progressCard}><View style={styles.progressTop}><View><Text style={styles.smallPurple}>NIVEL {progress.level}</Text><Text style={styles.levelTitle}>{progress.levelTitle}</Text></View><Text style={styles.xp}>{progress.xp} XP</Text></View><View style={styles.levelTrack}><View style={[styles.levelFill, { width: `${progress.levelProgress * 100}%` }]} /></View><Text style={styles.levelCaption}>{progress.level === 6 ? 'Nivel máximo del MVP ✦' : `${Math.max(0, progress.nextLevelXp - progress.xp)} XP para el siguiente nivel`}</Text></View><View style={styles.profileGrid}><View style={styles.profileStat}><Text style={styles.profileValue}>{progress.wordsPracticed}</Text><Text style={styles.profileLabel}>palabras practicadas</Text></View><View style={styles.profileStat}><Text style={styles.profileValue}>{progress.wordsMastered}</Text><Text style={styles.profileLabel}>palabras recordadas</Text></View><View style={styles.profileStat}><Text style={styles.profileValue}>{progress.streak}</Text><Text style={styles.profileLabel}>racha actual</Text></View><View style={styles.profileStat}><Text style={styles.profileValue}>{progress.retentionCompleted}</Text><Text style={styles.profileLabel}>pruebas completadas</Text></View></View><Text style={styles.sectionTitle}>Insignias</Text>{progress.badges.length ? progress.badges.map((badge) => <View style={styles.badge} key={badge}><Text style={styles.badgeText}>{badge}</Text></View>) : <View style={styles.emptyBadge}><Text style={styles.cardText}>Completa sesiones y pruebas de retención para desbloquear tus primeras insignias.</Text></View>}<Text style={styles.sectionTitle}>Evidencia por estrategia</Text>{(['context', 'audio', 'retrieval'] as Strategy[]).map((key) => <View style={styles.evidence} key={key}><View style={styles.evidenceTop}><Text style={styles.strategyTitle}>{STRATEGIES.find((s) => s.key === key)?.title}</Text><Text style={styles.evidenceScore}>{Math.round(strategyScore(stats[key]))}/100</Text></View><View style={styles.evidenceTrack}><View style={[styles.evidenceFill, { width: `${strategyScore(stats[key])}%` }]} /></View><Text style={styles.strategyText}>{stats[key].attempts} respuestas · retención 24 h: {stats[key].retention24Total ? pct(stats[key].retention24Correct / stats[key].retention24Total) : 'pendiente'} · 7 días: {stats[key].retention7Total ? pct(stats[key].retention7Correct / stats[key].retention7Total) : 'pendiente'}</Text></View>)}</ScrollView></SafeAreaView>;
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#FBF9FF' },
-  container: { padding: 22, paddingBottom: 38 },
-  lessonContainer: { flex: 1, padding: 22, backgroundColor: '#FBF9FF' },
-  resultContainer: { flex: 1, padding: 26, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FBF9FF' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 28 },
-  logo: { fontSize: 42, fontWeight: '900', color: '#6D28D9', letterSpacing: -3 },
-  logoSmall: { fontSize: 28, fontWeight: '900', color: '#6D28D9', letterSpacing: -2 },
-  logoSub: { fontSize: 9, fontWeight: '800', color: '#8B5CF6', letterSpacing: 2 },
-  profileChip: { backgroundColor: '#EDE9FE', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 18 },
-  profileChipText: { color: '#6D28D9', fontWeight: '800', fontSize: 13 },
-  hero: { backgroundColor: '#E9D5FF', borderRadius: 28, padding: 23, marginBottom: 16, overflow: 'hidden' },
-  moonBadge: { width: 46, height: 46, borderRadius: 23, backgroundColor: '#7C3AED', alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
-  moon: { color: '#FFFFFF', fontSize: 29, marginTop: -3 },
-  eyebrow: { color: '#7C3AED', fontSize: 11, fontWeight: '900', letterSpacing: 1.5, marginBottom: 8 },
-  title: { color: '#24133F', fontSize: 30, lineHeight: 35, fontWeight: '900', letterSpacing: -0.7, marginBottom: 10 },
-  description: { color: '#5B4A70', fontSize: 15, lineHeight: 22 },
-  retentionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#C4B5FD', borderRadius: 20, padding: 15, marginBottom: 16 },
-  cardIcon: { width: 42, height: 42, borderRadius: 14, backgroundColor: '#7C3AED', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
-  cardIconText: { color: '#FFFFFF', fontSize: 22, fontWeight: '900' },
-  flex: { flex: 1 },
-  arrow: { color: '#7C3AED', fontSize: 30, fontWeight: '300' },
-  mainCard: { backgroundColor: '#FFFFFF', borderRadius: 23, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: '#EEE8F8' },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  cardTitle: { color: '#2E1A47', fontSize: 17, fontWeight: '900' },
-  muted: { color: '#9B8BAA', fontSize: 12, marginTop: 3 },
-  cardText: { color: '#6D5C7D', fontSize: 14, lineHeight: 20 },
-  levelBadge: { backgroundColor: '#6D28D9', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6 },
-  levelText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
-  statsRow: { flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: '#F0EBF6', paddingTop: 15 },
-  stat: { color: '#6D28D9', fontSize: 25, fontWeight: '900', textAlign: 'center' },
-  label: { color: '#9B8BAA', fontSize: 11, marginTop: 2, textAlign: 'center' },
-  signalCard: { backgroundColor: '#7C3AED', borderRadius: 23, padding: 20, marginBottom: 25 },
-  signalEyebrow: { color: '#DDD6FE', fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginBottom: 5 },
-  signalTitle: { color: '#FFFFFF', fontSize: 23, fontWeight: '900', marginBottom: 4 },
-  sectionTitle: { color: '#2E1A47', fontSize: 20, fontWeight: '900', marginBottom: 12 },
-  strategy: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 18, padding: 13, marginBottom: 9, borderWidth: 1, borderColor: '#F0EBF6' },
-  number: { width: 36, height: 36, borderRadius: 12, backgroundColor: '#EDE9FE', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
-  numberText: { color: '#6D28D9', fontWeight: '900' },
-  strategyBody: { flex: 1 },
-  strategyTitle: { color: '#352044', fontSize: 15, fontWeight: '900' },
-  strategyText: { color: '#81718F', fontSize: 12, marginTop: 2 },
-  primary: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#6D28D9', borderRadius: 18, paddingVertical: 16, paddingHorizontal: 18, marginTop: 13 },
-  primaryText: { color: '#FFFFFF', fontSize: 16, fontWeight: '900' },
-  primaryArrow: { color: '#FFFFFF', fontSize: 20, fontWeight: '700', marginLeft: 10 },
-  disabled: { backgroundColor: '#C4B5FD' },
-  footer: { textAlign: 'center', color: '#9B8BAA', fontSize: 11, lineHeight: 17, marginTop: 14 },
-  topRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  progress: { color: '#8B5CF6', fontWeight: '900', fontSize: 13 },
-  progressBar: { height: 7, backgroundColor: '#EDE9FE', borderRadius: 5, overflow: 'hidden', marginBottom: 22 },
-  progressFill: { height: 7, backgroundColor: '#7C3AED', borderRadius: 5 },
-  strategyPill: { alignSelf: 'flex-start', backgroundColor: '#E9D5FF', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, marginBottom: 18 },
-  strategyPillText: { color: '#6D28D9', fontSize: 11, fontWeight: '900', letterSpacing: 0.8 },
-  contextBox: { backgroundColor: '#FFFFFF', borderRadius: 23, padding: 22, borderWidth: 1, borderColor: '#DDD6FE', marginBottom: 22 },
-  contextLabel: { color: '#8B5CF6', fontSize: 10, fontWeight: '900', letterSpacing: 1.2, marginBottom: 10 },
-  contextText: { color: '#32203F', fontSize: 20, lineHeight: 29, fontWeight: '700' },
-  audioBox: { backgroundColor: '#E9D5FF', borderRadius: 23, padding: 22, alignItems: 'center', marginBottom: 22 },
-  audioCircle: { width: 58, height: 58, borderRadius: 29, backgroundColor: '#7C3AED', alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
-  audioSymbol: { color: '#FFFFFF', fontSize: 28 },
-  audioTitle: { color: '#352044', fontSize: 19, fontWeight: '900', marginBottom: 12 },
-  audioButton: { backgroundColor: '#FFFFFF', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 15 },
-  audioButtonText: { color: '#6D28D9', fontWeight: '900' },
-  audioHint: { color: '#715C84', fontSize: 11, marginTop: 10 },
-  retrievalBox: { backgroundColor: '#FFFFFF', borderRadius: 23, padding: 24, borderWidth: 2, borderColor: '#C4B5FD', marginBottom: 22 },
-  bigSpanish: { color: '#6D28D9', fontSize: 32, fontWeight: '900', marginBottom: 5 },
-  retrievalText: { color: '#75657F', fontSize: 13, lineHeight: 19 },
-  question: { color: '#2E1A47', fontSize: 19, fontWeight: '900', marginBottom: 13 },
-  options: { gap: 9 },
-  option: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5DDF0', borderRadius: 16, paddingVertical: 15, paddingHorizontal: 17 },
-  optionText: { color: '#3D2B4B', fontSize: 15, fontWeight: '700' },
-  correct: { backgroundColor: '#E9D5FF', borderColor: '#8B5CF6' },
-  correctText: { color: '#5B21B6' },
-  wrong: { backgroundColor: '#F3E8FF', borderColor: '#A78BFA' },
-  hint: { alignSelf: 'center', padding: 13 },
-  hintText: { color: '#7C3AED', fontWeight: '800', fontSize: 13 },
-  hintDetail: { color: '#8B5CF6', textAlign: 'center', fontSize: 12, marginBottom: 5 },
-  feedback: { backgroundColor: '#F5F3FF', borderRadius: 17, padding: 15, marginTop: 12 },
-  feedbackGood: { borderWidth: 1, borderColor: '#A78BFA' },
-  feedbackNeutral: { borderWidth: 1, borderColor: '#DDD6FE' },
-  feedbackTitle: { color: '#5B21B6', fontSize: 15, fontWeight: '900', marginBottom: 5 },
-  feedbackText: { color: '#6D5C7D', fontSize: 13, lineHeight: 19 },
-  bottom: { marginTop: 'auto', paddingTop: 14 },
-  progressText: { color: '#9687A3', fontSize: 11, textAlign: 'center' },
-  resultIcon: { width: 70, height: 70, borderRadius: 24, backgroundColor: '#7C3AED', alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
-  resultStar: { color: '#FFFFFF', fontSize: 38 },
-  scoreCircle: { width: 130, height: 130, borderRadius: 65, borderWidth: 9, borderColor: '#C4B5FD', alignItems: 'center', justifyContent: 'center', marginVertical: 18, backgroundColor: '#FFFFFF' },
-  score: { color: '#6D28D9', fontSize: 29, fontWeight: '900' },
-  lessonTitle: { color: '#2E1A47', fontSize: 28, lineHeight: 33, fontWeight: '900', marginBottom: 18 },
-  back: { color: '#6D28D9', fontWeight: '900', marginBottom: 25 },
-  profileCard: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 18, marginBottom: 12, borderWidth: 1, borderColor: '#EEE8F8' },
-  profileScore: { color: '#6D28D9', fontSize: 23, fontWeight: '900' },
-  scoreBar: { height: 9, backgroundColor: '#EDE9FE', borderRadius: 8, overflow: 'hidden', marginBottom: 13 },
-  scoreBarFill: { height: 9, backgroundColor: '#7C3AED', borderRadius: 8 },
-  profileMetrics: { flexDirection: 'row', justifyContent: 'space-between' },
-  metric: { color: '#8A7998', fontSize: 11 },
-  metricStrong: { color: '#4C2A66', fontWeight: '900' },
+const PURPLE = '#6D28D9'; const PURPLE_LIGHT = '#EDE9FE'; const LILAC = '#C4B5FD'; const BG = '#FAF9FF'; const TEXT = '#24163D'; const MUTED = '#746B82';
+const styles = StyleSheet.create({ safe: { flex: 1, backgroundColor: BG }, container: { padding: 22, paddingBottom: 40 }, header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }, logo: { fontSize: 42, fontWeight: '900', color: PURPLE, letterSpacing: -3 }, logoSmall: { fontSize: 25, fontWeight: '900', color: PURPLE }, logoSub: { fontSize: 9, fontWeight: '800', letterSpacing: 2, color: MUTED }, profileChip: { backgroundColor: PURPLE_LIGHT, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20 }, profileChipText: { color: PURPLE, fontWeight: '800' }, hero: { backgroundColor: PURPLE, borderRadius: 28, padding: 24, marginBottom: 16 }, moonBadge: { width: 52, height: 52, borderRadius: 26, backgroundColor: LILAC, alignItems: 'center', justifyContent: 'center', marginBottom: 18 }, moon: { fontSize: 34, color: '#fff', fontWeight: '700' }, eyebrow: { color: PURPLE, fontSize: 11, fontWeight: '900', letterSpacing: 1.5, marginBottom: 8 }, hero: { backgroundColor: PURPLE, borderRadius: 28, padding: 24, marginBottom: 16 }, title: { fontSize: 31, lineHeight: 36, fontWeight: '900', color: TEXT, marginBottom: 10 }, heroTitle: { color: '#fff' }, description: { color: MUTED, fontSize: 15, lineHeight: 22 }, progressCard: { backgroundColor: '#fff', borderRadius: 24, padding: 20, marginBottom: 12, borderWidth: 1, borderColor: PURPLE_LIGHT }, progressTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, smallPurple: { color: PURPLE, fontSize: 10, fontWeight: '900', letterSpacing: 1 }, levelTitle: { color: TEXT, fontSize: 21, fontWeight: '900', marginTop: 3 }, xp: { color: PURPLE, fontSize: 18, fontWeight: '900' }, levelTrack: { height: 10, backgroundColor: PURPLE_LIGHT, borderRadius: 8, overflow: 'hidden', marginTop: 16 }, levelFill: { height: '100%', backgroundColor: PURPLE, borderRadius: 8 }, levelCaption: { color: MUTED, fontSize: 12, marginTop: 8 }, miniGrid: { flexDirection: 'row', gap: 8, marginBottom: 12 }, miniCard: { flex: 1, backgroundColor: '#fff', borderRadius: 18, padding: 13, borderWidth: 1, borderColor: PURPLE_LIGHT }, miniIcon: { fontSize: 18 }, miniValue: { color: TEXT, fontSize: 22, fontWeight: '900', marginTop: 4 }, miniLabel: { color: MUTED, fontSize: 10, lineHeight: 13 }, retentionCard: { backgroundColor: '#DDD6FE', borderRadius: 20, padding: 16, flexDirection: 'row', alignItems: 'center', marginBottom: 12 }, retentionIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginRight: 12 }, flex: { flex: 1 }, arrow: { color: PURPLE, fontSize: 30, marginLeft: 8 }, mainCard: { backgroundColor: '#fff', borderRadius: 24, padding: 20, marginBottom: 12 }, cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, cardTitle: { color: TEXT, fontSize: 17, fontWeight: '900' }, muted: { color: MUTED, fontSize: 12, marginTop: 3 }, levelBadge: { backgroundColor: PURPLE_LIGHT, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 }, levelText: { color: PURPLE, fontWeight: '900', fontSize: 10 }, statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 20 }, stat: { color: PURPLE, fontSize: 25, fontWeight: '900' }, label: { color: MUTED, fontSize: 11 }, cardText: { color: MUTED, fontSize: 13, lineHeight: 19, marginTop: 6 }, signalCard: { backgroundColor: PURPLE_LIGHT, borderRadius: 22, padding: 20, marginBottom: 20 }, signalEyebrow: { color: PURPLE, fontSize: 10, fontWeight: '900', letterSpacing: 1.2 }, signalTitle: { color: TEXT, fontSize: 24, fontWeight: '900', marginVertical: 4 }, sectionTitle: { color: TEXT, fontSize: 20, fontWeight: '900', marginTop: 12, marginBottom: 12 }, rewardRow: { backgroundColor: '#fff', borderRadius: 18, padding: 14, flexDirection: 'row', alignItems: 'center', marginBottom: 8 }, rewardIcon: { width: 42, height: 42, borderRadius: 14, backgroundColor: PURPLE_LIGHT, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, strategy: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 }, number: { width: 34, height: 34, borderRadius: 17, backgroundColor: PURPLE, alignItems: 'center', justifyContent: 'center', marginRight: 12 }, numberText: { color: '#fff', fontWeight: '900' }, strategyBody: { flex: 1 }, strategyTitle: { color: TEXT, fontWeight: '900', fontSize: 15 }, strategyText: { color: MUTED, fontSize: 12, lineHeight: 17, marginTop: 3 }, primary: { backgroundColor: PURPLE, minHeight: 54, borderRadius: 18, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 12 }, primaryText: { color: '#fff', fontWeight: '900', fontSize: 15 }, primaryArrow: { color: '#fff', fontSize: 20, marginLeft: 10 }, disabled: { opacity: 0.4 }, footer: { textAlign: 'center', color: MUTED, fontSize: 11, lineHeight: 16, marginTop: 16 }, lessonContainer: { flex: 1, padding: 22 }, topRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, progress: { color: MUTED, fontWeight: '800' }, progressBar: { height: 7, backgroundColor: PURPLE_LIGHT, borderRadius: 7, overflow: 'hidden', marginVertical: 12 }, progressFill: { height: '100%', backgroundColor: PURPLE, borderRadius: 7 }, strategyPill: { alignSelf: 'flex-start', backgroundColor: PURPLE_LIGHT, borderRadius: 15, paddingHorizontal: 12, paddingVertical: 7, marginBottom: 18 }, strategyPillText: { color: PURPLE, fontWeight: '900', fontSize: 11 }, contextBox: { backgroundColor: '#fff', borderRadius: 24, padding: 22, borderWidth: 1, borderColor: PURPLE_LIGHT, marginBottom: 18 }, contextLabel: { color: PURPLE, fontSize: 10, fontWeight: '900', letterSpacing: 1 }, contextText: { color: TEXT, fontSize: 20, lineHeight: 29, fontWeight: '700', marginTop: 10 }, audioBox: { backgroundColor: PURPLE, borderRadius: 24, padding: 22, alignItems: 'center', marginBottom: 18 }, audioCircle: { width: 58, height: 58, borderRadius: 29, backgroundColor: LILAC, alignItems: 'center', justifyContent: 'center' }, audioSymbol: { color: '#fff', fontSize: 28 }, audioTitle: { color: '#fff', fontSize: 20, fontWeight: '900', marginTop: 10 }, audioButton: { backgroundColor: '#fff', borderRadius: 16, paddingHorizontal: 20, paddingVertical: 12, marginTop: 14 }, audioButtonText: { color: PURPLE, fontWeight: '900' }, audioHint: { color: '#EDE9FE', fontSize: 11, marginTop: 9 }, retrievalBox: { backgroundColor: PURPLE_LIGHT, borderRadius: 24, padding: 22, marginBottom: 18 }, bigSpanish: { color: TEXT, fontSize: 30, fontWeight: '900', marginTop: 7 }, retrievalText: { color: MUTED, marginTop: 6, lineHeight: 19 }, question: { color: TEXT, fontSize: 21, fontWeight: '900', marginBottom: 14 }, options: { gap: 10 }, option: { backgroundColor: '#fff', borderRadius: 17, padding: 17, borderWidth: 1, borderColor: '#E5E1EB' }, optionText: { color: TEXT, fontSize: 16, fontWeight: '800', textAlign: 'center' }, correct: { backgroundColor: '#DDD6FE', borderColor: PURPLE }, correctText: { color: PURPLE }, wrong: { backgroundColor: '#F4EFFF', borderColor: '#A78BFA' }, hint: { padding: 14, alignItems: 'center' }, hintText: { color: PURPLE, fontWeight: '800' }, hintDetail: { color: MUTED, textAlign: 'center', fontSize: 12 }, feedback: { backgroundColor: '#fff', borderRadius: 18, padding: 16, marginTop: 12 }, feedbackGood: { borderWidth: 1, borderColor: LILAC }, feedbackNeutral: { borderWidth: 1, borderColor: PURPLE_LIGHT }, feedbackTitle: { color: TEXT, fontWeight: '900' }, feedbackText: { color: MUTED, marginTop: 5, lineHeight: 18 }, bottom: { marginTop: 'auto' }, progressText: { color: MUTED, fontSize: 11, marginBottom: 2 }, resultContainer: { flex: 1, padding: 24, justifyContent: 'center', alignItems: 'center' }, resultIcon: { width: 70, height: 70, borderRadius: 35, backgroundColor: PURPLE_LIGHT, alignItems: 'center', justifyContent: 'center', marginBottom: 16 }, resultStar: { color: PURPLE, fontSize: 35 }, resultXp: { color: PURPLE, fontSize: 24, fontWeight: '900', marginBottom: 12 }, scoreCircle: { width: 145, height: 145, borderRadius: 73, backgroundColor: '#fff', borderWidth: 8, borderColor: LILAC, alignItems: 'center', justifyContent: 'center', marginVertical: 18 }, score: { color: PURPLE, fontSize: 30, fontWeight: '900' }, lessonTitle: { color: TEXT, fontSize: 27, lineHeight: 32, fontWeight: '900', marginBottom: 18 }, retentionProgress: { marginBottom: 10 }, retentionProgressText: { color: MUTED, fontSize: 11, textAlign: 'right' }, back: { color: PURPLE, fontWeight: '900', marginBottom: 22 }, profileGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 }, profileStat: { width: '48%', backgroundColor: '#fff', borderRadius: 18, padding: 16 }, profileValue: { color: PURPLE, fontSize: 26, fontWeight: '900' }, profileLabel: { color: MUTED, fontSize: 11, marginTop: 3 }, badge: { backgroundColor: PURPLE_LIGHT, borderRadius: 16, padding: 15, marginBottom: 8 }, badgeText: { color: TEXT, fontWeight: '800' }, emptyBadge: { backgroundColor: '#fff', borderRadius: 18, padding: 16 }, evidence: { backgroundColor: '#fff', borderRadius: 18, padding: 16, marginBottom: 9 }, evidenceTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, evidenceScore: { color: PURPLE, fontWeight: '900' }, evidenceTrack: { height: 8, backgroundColor: PURPLE_LIGHT, borderRadius: 8, overflow: 'hidden', marginVertical: 9 }, evidenceFill: { height: '100%', backgroundColor: PURPLE, borderRadius: 8 }
 });
