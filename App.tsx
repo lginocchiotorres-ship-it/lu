@@ -1,3 +1,15 @@
+import { StatusBar } from 'expo-status-bar';
+import React from 'react';
+import { InspectionScreen } from './src/screens/InspectionScreen';
+
+export default function App() {
+  return (
+    <>
+      <InspectionScreen />
+      <StatusBar style="light" />
+    </>
+  );
+}
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
