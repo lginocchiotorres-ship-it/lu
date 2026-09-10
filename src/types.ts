@@ -45,7 +45,19 @@ export type RetentionRecord = {
   answers: Answer[];
 };
 
+export type GameResult = {
+  gameId: string;
+  strategy: string;
+  correct: boolean;
+  responseMs: number;
+  round: number;
+  production: boolean;
+  helpUsed: boolean;
+  createdAt: number;
+};
+
 export type LearningData = {
   sessions: Session[];
   retention: RetentionRecord[];
+  gameResults?: GameResult[];
 };
