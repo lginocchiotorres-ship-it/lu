@@ -19,6 +19,11 @@ export function getLearningPhase(data: LearningData): LearningPhase {
     ? completed24.reduce((sum, r) => sum + (r.answers.length ? r.answers.filter(a => a.correct).length / r.answers.length : 0), 0) / completed24.length
     : 0;
 
+  const completed7 = retention.filter(r => r.horizon === 168 && r.completedAt !== null);
+  const retention7 = completed7.length
+    ? completed7.reduce((sum, r) => sum + (r.answers.length ? r.answers.filter(a => a.correct).length / r.answers.length : 0), 0) / completed7.length
+    : 0;
+
   const patternResults = results.filter(r => ['pattern', 'cognate', 'falsefriend'].includes(r.gameId));
   const patternAccuracy = patternResults.length
     ? patternResults.filter(r => r.correct).length / patternResults.length
@@ -29,9 +34,13 @@ export function getLearningPhase(data: LearningData): LearningPhase {
     ? productionResults.filter(r => r.correct).length / productionResults.length
     : 0;
 
-  if (sessions.length >= 2 && retention24 < 0.60) return 'input';
+  if (retention24 < 0.60) return 'input';
   if (patternResults.length < 3 || patternAccuracy < 0.65) return 'patterns';
   if (productionResults.length < 4 || productionAccuracy < 0.70) return 'retrieval';
+
+  // Communication is the most advanced phase: require evidence of delayed
+  // retention instead of unlocking it only because enough games were played.
+  if (completed7.length === 0 || retention7 < 0.65) return 'retrieval';
   return 'communication';
 }
 
@@ -59,7 +68,7 @@ export const PHASE_INFO: Record<LearningPhase, { title: string; subtitle: string
 };
 
 export function getAllowedGameIds(phase: LearningPhase): string[] {
-  const input = ['audio', 'context', 'story', 'pairs', 'definition'];
+  const input = ['audio', 'context', 'story', 'pairs', 'definition', 'reverse'];
   const patterns = ['pattern', 'cognate', 'falsefriend', 'grammar'];
   const retrieval = ['flash', 'speed', 'sentence', 'shadow', 'mixed'];
   const communication = ['challenge', 'taboo', 'survival'];
