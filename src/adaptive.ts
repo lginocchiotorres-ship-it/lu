@@ -13,6 +13,13 @@ const emptyStats = (): StrategyStats => ({
   retention7Total: 0,
 });
 
+function gameToStrategy(gameId: string): Strategy | null {
+  if (['audio', 'shadow'].includes(gameId)) return 'audio';
+  if (['context', 'story', 'pattern', 'cognate', 'falsefriend', 'grammar', 'taboo', 'survival'].includes(gameId)) return 'context';
+  if (['pairs', 'definition', 'flash', 'speed', 'sentence', 'mixed', 'challenge', 'reverse'].includes(gameId)) return 'retrieval';
+  return null;
+}
+
 export function getStats(data: LearningData): Record<Strategy, StrategyStats> {
   const stats: Record<Strategy, StrategyStats> = {
     context: emptyStats(),
@@ -20,8 +27,8 @@ export function getStats(data: LearningData): Record<Strategy, StrategyStats> {
     retrieval: emptyStats(),
   };
 
-  data.sessions.forEach((session) => {
-    session.answers.forEach((answer) => {
+  data.sessions.forEach(session => {
+    session.answers.forEach(answer => {
       const stat = stats[answer.strategy];
       stat.attempts += 1;
       if (answer.correct) stat.correct += 1;
@@ -30,8 +37,8 @@ export function getStats(data: LearningData): Record<Strategy, StrategyStats> {
     });
   });
 
-  data.retention.forEach((record) => {
-    record.answers.forEach((answer) => {
+  data.retention.forEach(record => {
+    record.answers.forEach(answer => {
       const stat = stats[answer.strategy];
       if (record.horizon === 24) {
         stat.retention24Total += 1;
@@ -44,11 +51,22 @@ export function getStats(data: LearningData): Record<Strategy, StrategyStats> {
     });
   });
 
+  // Games are additional observations. They influence the immediate-performance
+  // component of adaptation, while retention still comes only from delayed tests.
+  (data.gameResults ?? []).forEach(result => {
+    const strategy = gameToStrategy(result.gameId);
+    if (!strategy) return;
+    const stat = stats[strategy];
+    stat.attempts += 1;
+    if (result.correct) stat.correct += 1;
+    stat.totalResponseMs += result.responseMs;
+    if (result.helpUsed) stat.totalHints += 1;
+  });
+
   return stats;
 }
 
 function smoothedRate(correct: number, total: number, prior = 0.5) {
-  // Laplace smoothing prevents one lucky/correct answer from dominating a new strategy.
   return (correct + prior * 2) / (total + 2);
 }
 
@@ -61,7 +79,7 @@ export function strategyScore(stat: StrategyStats) {
   const hintRate = stat.attempts ? stat.totalHints / stat.attempts : 0;
   const hintPenalty = Math.min(0.12, hintRate * 0.025);
 
-  // LÜ prioritizes durable learning: 7-day retention > 24-hour retention > immediate performance.
+  // Durable learning remains the strongest signal: 7-day > 24-hour > immediate.
   return Math.round(Math.max(0, Math.min(100, 100 * (
     immediate * 0.20 +
     r24 * 0.30 +
@@ -73,34 +91,24 @@ export function strategyScore(stat: StrategyStats) {
 
 export function adaptiveOrder(data: LearningData): Strategy[] {
   const stats = getStats(data);
-  const scored = STRATEGY_KEYS.map((key) => ({ key, score: strategyScore(stats[key]), observations: stats[key].attempts }));
+  const scored = STRATEGY_KEYS.map(key => ({ key, score: strategyScore(stats[key]), observations: stats[key].attempts }));
 
-  // Exploration first until every strategy has enough observations to compare fairly.
-  const unexplored = scored.filter((item) => item.observations < 8).sort((a, b) => a.observations - b.observations);
-  const explored = scored.filter((item) => item.observations >= 8).sort((a, b) => b.score - a.score);
-
-  return [...unexplored, ...explored].map((item) => item.key);
+  const unexplored = scored.filter(item => item.observations < 8).sort((a, b) => a.observations - b.observations);
+  const explored = scored.filter(item => item.observations >= 8).sort((a, b) => b.score - a.score);
+  return [...unexplored, ...explored].map(item => item.key);
 }
 
 export function bestStrategy(data: LearningData): Strategy | null {
-  if (!data.sessions.some((session) => session.answers.length > 0)) return null;
+  if (!data.sessions.some(session => session.answers.length > 0) && !(data.gameResults ?? []).some(r => r.correct || !r.correct)) return null;
   const stats = getStats(data);
   return [...STRATEGY_KEYS].sort((a, b) => strategyScore(stats[b]) - strategyScore(stats[a]))[0];
 }
 
 export function dueRetention(data: LearningData) {
   const now = Date.now();
-  return data.retention
-    .filter((record) => record.completedAt === null && record.dueAt <= now)
-    .sort((a, b) => a.dueAt - b.dueAt)[0] ?? null;
+  return data.retention.filter(record => record.completedAt === null && record.dueAt <= now).sort((a, b) => a.dueAt - b.dueAt)[0] ?? null;
 }
 
 export function createRetentionRecord(sessionId: string, createdAt: number, horizon: 24 | 168) {
-  return {
-    sessionId,
-    dueAt: createdAt + horizon * 60 * 60 * 1000,
-    completedAt: null,
-    horizon,
-    answers: [],
-  } as const;
+  return { sessionId, dueAt: createdAt + horizon * 60 * 60 * 1000, completedAt: null, horizon, answers: [] } as const;
 }
