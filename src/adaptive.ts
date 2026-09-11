@@ -51,8 +51,8 @@ export function getStats(data: LearningData): Record<Strategy, StrategyStats> {
     });
   });
 
-  // Games are additional observations. They influence the immediate-performance
-  // component of adaptation, while retention still comes only from delayed tests.
+  // Games are additional immediate-performance observations.
+  // Delayed retention remains measured only by the dedicated retention tests.
   (data.gameResults ?? []).forEach(result => {
     const strategy = gameToStrategy(result.gameId);
     if (!strategy) return;
@@ -99,7 +99,10 @@ export function adaptiveOrder(data: LearningData): Strategy[] {
 }
 
 export function bestStrategy(data: LearningData): Strategy | null {
-  if (!data.sessions.some(session => session.answers.length > 0) && !(data.gameResults ?? []).some(r => r.correct || !r.correct)) return null;
+  const hasSessionData = data.sessions.some(session => session.answers.length > 0);
+  const hasGameData = (data.gameResults ?? []).length > 0;
+  if (!hasSessionData && !hasGameData) return null;
+
   const stats = getStats(data);
   return [...STRATEGY_KEYS].sort((a, b) => strategyScore(stats[b]) - strategyScore(stats[a]))[0];
 }
