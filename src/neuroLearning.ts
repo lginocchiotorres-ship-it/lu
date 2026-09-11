@@ -24,22 +24,18 @@ export function getLearningPhase(data: LearningData): LearningPhase {
     ? completed7.reduce((sum, r) => sum + (r.answers.length ? r.answers.filter(a => a.correct).length / r.answers.length : 0), 0) / completed7.length
     : 0;
 
-  const patternResults = results.filter(r => ['pattern', 'cognate', 'falsefriend'].includes(r.gameId));
+  const patternResults = results.filter(r => ['pattern', 'cognate', 'falsefriend'].includes(r.gameId) && !r.production);
   const patternAccuracy = patternResults.length
     ? patternResults.filter(r => r.correct).length / patternResults.length
     : 0;
 
+  // Production games currently measure completion, not linguistic quality.
+  // They therefore cannot be treated as "correctness" evidence.
   const productionResults = results.filter(r => r.production);
-  const productionAccuracy = productionResults.length
-    ? productionResults.filter(r => r.correct).length / productionResults.length
-    : 0;
 
   if (retention24 < 0.60) return 'input';
   if (patternResults.length < 3 || patternAccuracy < 0.65) return 'patterns';
-  if (productionResults.length < 4 || productionAccuracy < 0.70) return 'retrieval';
-
-  // Communication is the most advanced phase: require evidence of delayed
-  // retention instead of unlocking it only because enough games were played.
+  if (productionResults.length < 4) return 'retrieval';
   if (completed7.length === 0 || retention7 < 0.65) return 'retrieval';
   return 'communication';
 }
