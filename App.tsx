@@ -2,44 +2,278 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Speech from 'expo-speech';
-import { WORDS, STRATEGIES } from './src/data';
+import { WORDS } from './src/data';
 import { adaptiveOrder, bestStrategy, dueRetention, getStats, createRetentionRecord } from './src/adaptive';
 import { getProgress } from './src/progress';
 import { ACHIEVEMENTS, getAchievementProgress } from './src/achievements';
+import { getLearningPhase, PHASE_INFO } from './src/neuroLearning';
 import { Answer, LearningData, Strategy, Word } from './src/types';
 import GamesScreen from './src/GamesScreen';
 
 type Screen = 'home' | 'lesson' | 'result' | 'retention' | 'profile' | 'achievements' | 'games';
 type LessonWord = Word & { strategy: Strategy };
 const STORAGE_KEY = '@lu_learning_data_v4';
-const emptyData = (): LearningData => ({ sessions: [], retention: [] });
+const emptyData = (): LearningData => ({ sessions: [], retention: [], gameResults: [] });
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-function makeOptions(current: Word) { return [current.word, ...WORDS.filter((w) => w.id !== current.id).slice(0, 3).map((w) => w.word)].sort(() => Math.random() - 0.5); }
+
+function makeOptions(current: Word) {
+  return [current.word, ...WORDS.filter(w => w.id !== current.id).slice(0, 3).map(w => w.word)]
+    .sort(() => Math.random() - 0.5);
+}
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('home');
   const [data, setData] = useState<LearningData>(emptyData());
-  const [lesson, setLesson] = useState<LessonWord[]>([]); const [index, setIndex] = useState(0); const [selected, setSelected] = useState<string | null>(null); const [answers, setAnswers] = useState<Answer[]>([]); const [attempts, setAttempts] = useState(0); const [hints, setHints] = useState(0); const [startedAt, setStartedAt] = useState(0); const [sessionId, setSessionId] = useState('');
-  const [retentionSessionId, setRetentionSessionId] = useState<string | null>(null); const [retentionIndex, setRetentionIndex] = useState(0); const [retentionAnswers, setRetentionAnswers] = useState<Answer[]>([]);
+  const [lesson, setLesson] = useState<LessonWord[]>([]);
+  const [index, setIndex] = useState(0);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [answers, setAnswers] = useState<Answer[]>([]);
+  const [attempts, setAttempts] = useState(0);
+  const [hints, setHints] = useState(0);
+  const [startedAt, setStartedAt] = useState(0);
+  const [sessionId, setSessionId] = useState('');
+  const [lastSessionAnswers, setLastSessionAnswers] = useState<Answer[]>([]);
+  const [retentionSessionId, setRetentionSessionId] = useState<string | null>(null);
+  const [retentionIndex, setRetentionIndex] = useState(0);
+  const [retentionAnswers, setRetentionAnswers] = useState<Answer[]>([]);
+  const [retentionSelected, setRetentionSelected] = useState<string | null>(null);
   const [achievementFilter, setAchievementFilter] = useState('all');
-  useEffect(() => { AsyncStorage.getItem(STORAGE_KEY).then((raw) => { if (raw) { try { setData(JSON.parse(raw)); } catch { setData(emptyData()); } } }); }, []);
-  async function persist(next: LearningData) { setData(next); await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)); }
-  const current = lesson[index]; const options = useMemo(() => current ? makeOptions(current) : [], [current?.id]); const pendingRetention = dueRetention(data); const progress = getProgress(data); const best = bestStrategy(data);
-  function startLesson() { const words = WORDS.slice(0, 5); setLesson(adaptiveOrder(data).flatMap((strategy) => words.map((word) => ({ ...word, strategy })))); setIndex(0); setSelected(null); setAnswers([]); setAttempts(0); setHints(0); setSessionId(makeId()); setStartedAt(Date.now()); setScreen('lesson'); }
-  function answer(value: string) { if (!current || selected) return; const record: Answer = { wordId: current.id, strategy: current.strategy, correct: value === current.word, responseMs: Date.now() - startedAt, attempts: attempts + 1, hints }; setAttempts((v) => v + 1); setSelected(value); setAnswers((old) => [...old, record]); }
-  function useHint() { if (!selected) setHints((v) => v + 1); }
-  async function nextQuestion() { if (!selected || !current) return; if (index < lesson.length - 1) { setIndex((v) => v + 1); setSelected(null); setAttempts(0); setHints(0); setStartedAt(Date.now()); return; } const createdAt = Date.now(); const session = { id: sessionId, createdAt, answers }; await persist({ ...data, sessions: [...data.sessions, session], retention: [...data.retention, createRetentionRecord(session.id, createdAt, 24), createRetentionRecord(session.id, createdAt, 168)] }); setScreen('result'); }
-  function retentionWords(session: string) { const s = data.sessions.find((x) => x.id === session); return s ? s.answers.map((a) => { const w = WORDS.find((x) => x.id === a.wordId); return w ? ({ ...w, strategy: a.strategy } as LessonWord) : null; }).filter(Boolean) as LessonWord[] : []; }
-  function beginRetention(session: string) { setRetentionSessionId(session); setRetentionIndex(0); setRetentionAnswers([]); setScreen('retention'); }
-  function answerRetention(value: string, item: LessonWord) { if (retentionAnswers.length > retentionIndex) return; setRetentionAnswers((old) => [...old, { wordId: item.id, strategy: item.strategy, correct: value === item.word, responseMs: 0, attempts: 1, hints: 0 }]); }
-  async function finishRetention() { if (!retentionSessionId) return; const target = data.retention.find((r) => r.sessionId === retentionSessionId && r.completedAt === null && r.dueAt <= Date.now()); if (!target) return; const updated = data.retention.map((r) => r.sessionId === retentionSessionId && r.horizon === target.horizon ? { ...r, completedAt: Date.now(), answers: retentionAnswers } : r); await persist({ ...data, retention: updated }); setScreen('home'); }
 
-  if (screen === 'games') return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><GamesScreen onBack={() => setScreen('home')} /></SafeAreaView>;
+  useEffect(() => {
+    AsyncStorage.getItem(STORAGE_KEY).then(raw => {
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw);
+        setData({ sessions: parsed.sessions ?? [], retention: parsed.retention ?? [], gameResults: parsed.gameResults ?? [] });
+      } catch {
+        setData(emptyData());
+      }
+    });
+  }, []);
 
-  if (screen === 'achievements') { const filtered = ACHIEVEMENTS.filter((a) => achievementFilter === 'all' || a.category === achievementFilter); const unlockedCount = ACHIEVEMENTS.filter((a) => getAchievementProgress(a.id, progress) >= a.target).length; return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}><View style={styles.topHeader}><TouchableOpacity onPress={() => setScreen('home')}><Text style={styles.back}>‹</Text></TouchableOpacity><View><Text style={styles.logo}>LÜ</Text><Text style={styles.logoSub}>LOGROS</Text></View><View style={styles.trophyBadge}><Text style={styles.trophy}>🏆</Text></View></View><View style={styles.achievementHero}><Text style={styles.eyebrowLight}>TU COLECCIÓN</Text><Text style={styles.achievementHeroTitle}>Logros</Text><Text style={styles.achievementHeroText}>Convierte tus avances reales en insignias. Practica, recuerda y desbloquea nuevos hitos.</Text><View style={styles.achievementCounter}><Text style={styles.counterNumber}>{unlockedCount}</Text><View><Text style={styles.counterSlash}> / {ACHIEVEMENTS.length}</Text><Text style={styles.counterLabel}>logros desbloqueados</Text></View></View><View style={styles.collectionTrack}><View style={[styles.collectionFill,{width:`${(unlockedCount/ACHIEVEMENTS.length)*100}%`}]} /></View></View><ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filters}>{[['all','Todos'],['inicio','Inicio'],['constancia','Constancia'],['memoria','Memoria'],['exploracion','Exploración']].map(([key,label]) => <TouchableOpacity key={key} onPress={() => setAchievementFilter(key)} style={[styles.filter,achievementFilter===key&&styles.filterActive]}><Text style={[styles.filterText,achievementFilter===key&&styles.filterTextActive]}>{label}</Text></TouchableOpacity>)}</ScrollView>{filtered.map((a) => { const value=getAchievementProgress(a.id,progress); const unlocked=value>=a.target; const ratio=Math.min(1,value/a.target); return <View key={a.id} style={[styles.achievementCard,unlocked&&styles.achievementUnlocked]}><View style={[styles.achievementIcon,!unlocked&&styles.lockedIcon]}><Text style={{fontSize:25,opacity:unlocked?1:0.35}}>{unlocked?a.icon:'🔒'}</Text></View><View style={styles.flex}><View style={styles.achievementTitleRow}><Text style={styles.achievementTitle}>{a.title}</Text>{unlocked&&<View style={styles.unlockedBadge}><Text style={styles.unlockedText}>✓ DESBLOQUEADO</Text></View>}</View><Text style={styles.achievementDescription}>{a.description}</Text>{!unlocked&&<><View style={styles.achievementTrack}><View style={[styles.achievementFill,{width:`${ratio*100}%`}]} /></View><Text style={styles.achievementProgress}>{Math.min(value,a.target)} / {a.target}</Text></>}</View></View>})}<View style={styles.achievementTip}><Text style={styles.tipIcon}>✦</Text><View style={styles.flex}><Text style={styles.tipTitle}>Tu progreso tiene propósito</Text><Text style={styles.tipText}>Los logros premian acciones dentro de LÜ. La evidencia de memoria sigue midiéndose por separado para que la gamificación no sustituya el aprendizaje.</Text></View></View></ScrollView></SafeAreaView>; }
+  async function persist(next: LearningData) {
+    setData(next);
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  }
 
-  if (screen === 'home') return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><ScrollView contentContainerStyle={styles.container}><View style={styles.header}><View><Text style={styles.logo}>LÜ</Text><Text style={styles.logoSub}>LANGUAGE INTELLIGENCE</Text></View><View style={styles.headerActions}><TouchableOpacity style={styles.achievementButton} onPress={() => setScreen('achievements')}><Text style={styles.achievementButtonIcon}>🏆</Text><Text style={styles.achievementButtonText}>Logros</Text></TouchableOpacity><TouchableOpacity style={styles.profileChip} onPress={() => setScreen('profile')}><Text style={styles.profileChipText}>Mi progreso</Text></TouchableOpacity></View></View><View style={styles.hero}><View style={styles.moonBadge}><Text style={styles.moon}>☾</Text></View><Text style={styles.eyebrow}>TU VIAJE DE APRENDIZAJE</Text><Text style={styles.title}>Descubre cómo aprendes idiomas.</Text><Text style={styles.description}>LÜ prueba estrategias, mide tu retención y adapta tu entrenamiento con tu propia evidencia.</Text></View><View style={styles.progressCard}><View style={styles.progressTop}><View><Text style={styles.smallPurple}>NIVEL {progress.level}</Text><Text style={styles.levelTitle}>{progress.levelTitle}</Text></View><Text style={styles.xp}>{progress.xp} XP</Text></View><View style={styles.levelTrack}><View style={[styles.levelFill,{width:`${progress.levelProgress*100}%`}]} /></View><Text style={styles.levelCaption}>{progress.level===6?'Nivel máximo del MVP ✦':`${Math.max(0,progress.nextLevelXp-progress.xp)} XP para el siguiente nivel`}</Text></View><View style={styles.miniGrid}><View style={styles.miniCard}><Text style={styles.miniIcon}>🔥</Text><Text style={styles.miniValue}>{progress.streak}</Text><Text style={styles.miniLabel}>días de racha</Text></View><View style={styles.miniCard}><Text style={styles.miniIcon}>🧠</Text><Text style={styles.miniValue}>{progress.wordsMastered}</Text><Text style={styles.miniLabel}>palabras recordadas</Text></View><View style={styles.miniCard}><Text style={styles.miniIcon}>✦</Text><Text style={styles.miniValue}>{progress.sessions}</Text><Text style={styles.miniLabel}>sesiones</Text></View></View>{pendingRetention&&<TouchableOpacity style={styles.retentionCard} onPress={()=>beginRetention(pendingRetention.sessionId)}><View style={styles.retentionIcon}><Text>↗</Text></View><View style={styles.flex}><Text style={styles.cardTitle}>{pendingRetention.horizon===24?'Medición de 24 horas':'Medición de 7 días'}</Text><Text style={styles.cardText}>Completa la prueba para ganar progreso y medir tu memoria.</Text></View><Text style={styles.arrow}>›</Text></TouchableOpacity>}<TouchableOpacity style={styles.primary} onPress={startLesson}><Text style={styles.primaryText}>{progress.sessions?'Continuar entrenando':'Comenzar experimento'}</Text><Text style={styles.primaryArrow}>→</Text></TouchableOpacity><TouchableOpacity style={styles.gamesButton} onPress={()=>setScreen('games')}><Text style={styles.gamesIcon}>🎮</Text><View style={styles.flex}><Text style={styles.gamesTitle}>Laboratorio de juegos</Text><Text style={styles.gamesText}>16 minijuegos basados en recuperación, contexto, audio, historias y patrones.</Text></View><Text style={styles.arrow}>›</Text></TouchableOpacity></ScrollView></SafeAreaView>;
-  return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><View style={styles.resultContainer}><Text style={styles.title}>LÜ</Text><Text style={styles.description}>Continúa desde la pantalla principal.</Text><TouchableOpacity style={styles.primary} onPress={()=>setScreen('home')}><Text style={styles.primaryText}>Volver al inicio</Text></TouchableOpacity></View></SafeAreaView>;
+  const current = lesson[index];
+  const options = useMemo(() => current ? makeOptions(current) : [], [current?.id, index]);
+  const pendingRetention = dueRetention(data);
+  const progress = getProgress(data);
+  const best = bestStrategy(data);
+  const phase = getLearningPhase(data);
+  const phaseInfo = PHASE_INFO[phase];
+  const stats = getStats(data);
+
+  function startLesson() {
+    const words = WORDS.slice(0, 5);
+    const order = adaptiveOrder(data);
+    const training = order.flatMap(strategy => words.map(word => ({ ...word, strategy })));
+    setLesson(training);
+    setIndex(0);
+    setSelected(null);
+    setAnswers([]);
+    setAttempts(0);
+    setHints(0);
+    setSessionId(makeId());
+    setStartedAt(Date.now());
+    setScreen('lesson');
+  }
+
+  function answer(value: string) {
+    if (!current || selected) return;
+    const record: Answer = {
+      wordId: current.id,
+      strategy: current.strategy,
+      correct: value === current.word,
+      responseMs: Date.now() - startedAt,
+      attempts: attempts + 1,
+      hints,
+    };
+    setAttempts(v => v + 1);
+    setSelected(value);
+    setAnswers(old => [...old, record]);
+  }
+
+  function useHint() {
+    if (!selected) setHints(v => v + 1);
+  }
+
+  async function nextQuestion() {
+    if (!selected || !current) return;
+    if (index < lesson.length - 1) {
+      setIndex(v => v + 1);
+      setSelected(null);
+      setAttempts(0);
+      setHints(0);
+      setStartedAt(Date.now());
+      return;
+    }
+
+    // React state updates are asynchronous. Rebuild the final answer explicitly
+    // so the last question can never disappear from the saved session.
+    const finalRecord: Answer = {
+      wordId: current.id,
+      strategy: current.strategy,
+      correct: selected === current.word,
+      responseMs: Date.now() - startedAt,
+      attempts: attempts + 1,
+      hints,
+    };
+    const finalAnswers = [...answers, finalRecord];
+    const createdAt = Date.now();
+    const session = { id: sessionId, createdAt, answers: finalAnswers };
+    const next: LearningData = {
+      ...data,
+      sessions: [...data.sessions, session],
+      retention: [
+        ...data.retention,
+        createRetentionRecord(session.id, createdAt, 24),
+        createRetentionRecord(session.id, createdAt, 168),
+      ],
+    };
+    setLastSessionAnswers(finalAnswers);
+    await persist(next);
+    setScreen('result');
+  }
+
+  function retentionWords(session: string) {
+    const s = data.sessions.find(x => x.id === session);
+    if (!s) return [] as LessonWord[];
+    return s.answers.map(a => WORDS.find(w => w.id === a.wordId))
+      .filter((w): w is Word => Boolean(w))
+      .map(w => ({ ...w, strategy: s.answers.find(a => a.wordId === w.id)?.strategy ?? 'retrieval' }));
+  }
+
+  function beginRetention(session: string) {
+    setRetentionSessionId(session);
+    setRetentionIndex(0);
+    setRetentionAnswers([]);
+    setRetentionSelected(null);
+    setScreen('retention');
+  }
+
+  function answerRetention(value: string, item: LessonWord) {
+    if (retentionSelected) return;
+    setRetentionSelected(value);
+    setRetentionAnswers(old => [...old, {
+      wordId: item.id,
+      strategy: item.strategy,
+      correct: value === item.word,
+      responseMs: 0,
+      attempts: 1,
+      hints: 0,
+    }]);
+  }
+
+  async function nextRetention() {
+    if (!retentionSelected || !retentionSessionId) return;
+    const words = retentionWords(retentionSessionId);
+    const item = words[retentionIndex];
+    if (!item) return;
+
+    if (retentionIndex < words.length - 1) {
+      setRetentionIndex(v => v + 1);
+      setRetentionSelected(null);
+      return;
+    }
+
+    const finalRecord: Answer = {
+      wordId: item.id,
+      strategy: item.strategy,
+      correct: retentionSelected === item.word,
+      responseMs: 0,
+      attempts: 1,
+      hints: 0,
+    };
+    const finalAnswers = [...retentionAnswers, finalRecord];
+    const target = data.retention.find(r => r.sessionId === retentionSessionId && r.completedAt === null && r.dueAt <= Date.now());
+    if (!target) return;
+    const updated = data.retention.map(r =>
+      r.sessionId === retentionSessionId && r.horizon === target.horizon
+        ? { ...r, completedAt: Date.now(), answers: finalAnswers }
+        : r
+    );
+    await persist({ ...data, retention: updated });
+    setScreen('result');
+    setLastSessionAnswers(finalAnswers);
+  }
+
+  if (screen === 'games') {
+    return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><GamesScreen onBack={() => setScreen('home')} /></SafeAreaView>;
+  }
+
+  if (screen === 'lesson') {
+    const correct = selected === current?.word;
+    return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><ScrollView contentContainerStyle={styles.container}>
+      <View style={styles.topRow}><TouchableOpacity onPress={() => setScreen('home')}><Text style={styles.back}>‹</Text></TouchableOpacity><Text style={styles.logoSmall}>LÜ</Text><Text style={styles.counter}>{index + 1} / {lesson.length}</Text></View>
+      <View style={styles.phaseCard}><Text style={styles.phaseTitle}>{phaseInfo.title}</Text><Text style={styles.phaseSub}>{phaseInfo.subtitle}</Text></View>
+      <Text style={styles.eyebrow}>ENTRENAMIENTO</Text>
+      <Text style={styles.lessonPrompt}>{current?.strategy === 'audio' ? '¿Qué palabra escuchaste?' : current?.strategy === 'context' ? 'Elige la palabra que completa el contexto.' : 'Recupera la palabra en inglés.'}</Text>
+      <View style={styles.wordCard}><Text style={styles.context}>{current?.context}</Text><Text style={styles.bigWord}>{current?.translation}</Text><Text style={styles.hintText}>{current?.example}</Text></View>
+      {options.map(option => <TouchableOpacity key={option} disabled={Boolean(selected)} onPress={() => answer(option)} style={[styles.option, selected === option && (correct ? styles.correct : styles.wrong), selected && option === current?.word && styles.correct]}><Text style={styles.optionText}>{option}</Text></TouchableOpacity>)}
+      {!selected && <TouchableOpacity style={styles.hintButton} onPress={useHint}><Text style={styles.hintButtonText}>💡 Usar pista {hints ? `(${hints})` : ''}</Text></TouchableOpacity>}
+      {selected && <><View style={[styles.feedback, correct ? styles.feedbackGood : styles.feedbackBad]}><Text style={styles.feedbackTitle}>{correct ? '✓ Correcto' : 'Revisa esta respuesta'}</Text><Text style={styles.feedbackText}>{correct ? 'La respuesta se registra para medir tu aprendizaje.' : `La respuesta correcta es: ${current?.word}`}</Text></View><TouchableOpacity style={styles.primary} onPress={nextQuestion}><Text style={styles.primaryText}>{index === lesson.length - 1 ? 'Ver resultado' : 'Siguiente'}</Text><Text style={styles.primaryArrow}>→</Text></TouchableOpacity></>}
+    </ScrollView></SafeAreaView>;
+  }
+
+  if (screen === 'retention') {
+    const words = retentionSessionId ? retentionWords(retentionSessionId) : [];
+    const item = words[retentionIndex];
+    const correct = retentionSelected === item?.word;
+    return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><ScrollView contentContainerStyle={styles.container}>
+      <View style={styles.topRow}><TouchableOpacity onPress={() => setScreen('home')}><Text style={styles.back}>‹</Text></TouchableOpacity><Text style={styles.logoSmall}>LÜ</Text><Text style={styles.counter}>{retentionIndex + 1} / {words.length}</Text></View>
+      <Text style={styles.eyebrow}>MEDICIÓN DE RETENCIÓN</Text><Text style={styles.lessonPrompt}>¿Qué recuerdas sin volver a estudiar?</Text>
+      <View style={styles.wordCard}><Text style={styles.bigWord}>{item?.translation}</Text><Text style={styles.hintText}>Recupera la palabra en inglés.</Text></View>
+      {makeOptions(item ?? WORDS[0]).map(option => <TouchableOpacity key={option} disabled={Boolean(retentionSelected)} onPress={() => item && answerRetention(option, item)} style={[styles.option, retentionSelected === option && (correct ? styles.correct : styles.wrong), retentionSelected && option === item?.word && styles.correct]}><Text style={styles.optionText}>{option}</Text></TouchableOpacity>)}
+      {retentionSelected && <><View style={[styles.feedback, correct ? styles.feedbackGood : styles.feedbackBad]}><Text style={styles.feedbackTitle}>{correct ? '✓ Recordada' : 'No recordada esta vez'}</Text><Text style={styles.feedbackText}>{correct ? 'Este dato alimenta tu perfil de retención.' : `La respuesta era: ${item?.word}`}</Text></View><TouchableOpacity style={styles.primary} onPress={nextRetention}><Text style={styles.primaryText}>{retentionIndex === words.length - 1 ? 'Guardar medición' : 'Siguiente'}</Text><Text style={styles.primaryArrow}>→</Text></TouchableOpacity></>}
+    </ScrollView></SafeAreaView>;
+  }
+
+  if (screen === 'result') {
+    const correctCount = lastSessionAnswers.filter(a => a.correct).length;
+    const total = lastSessionAnswers.length || 1;
+    return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><ScrollView contentContainerStyle={styles.container}>
+      <View style={styles.resultHero}><Text style={styles.resultEmoji}>✦</Text><Text style={styles.eyebrow}>MEDICIÓN COMPLETADA</Text><Text style={styles.resultTitle}>{Math.round(correctCount / total * 100)}%</Text><Text style={styles.description}>{correctCount} de {total} respuestas correctas.</Text></View>
+      <View style={styles.phaseCard}><Text style={styles.phaseTitle}>Tu entrenamiento sigue siendo adaptativo</Text><Text style={styles.phaseSub}>LÜ compara esta sesión con tus mediciones de 24 horas y 7 días antes de priorizar estrategias.</Text></View>
+      <TouchableOpacity style={styles.primary} onPress={() => setScreen('home')}><Text style={styles.primaryText}>Continuar</Text><Text style={styles.primaryArrow}>→</Text></TouchableOpacity>
+    </ScrollView></SafeAreaView>;
+  }
+
+  if (screen === 'profile') {
+    return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><ScrollView contentContainerStyle={styles.container}>
+      <View style={styles.topRow}><TouchableOpacity onPress={() => setScreen('home')}><Text style={styles.back}>‹</Text></TouchableOpacity><Text style={styles.logoSmall}>LÜ</Text></View>
+      <Text style={styles.eyebrow}>MI PERFIL DE APRENDIZAJE</Text><Text style={styles.title}>Lo que LÜ observa</Text><Text style={styles.description}>Estos índices describen tu desempeño dentro de LÜ; no son mediciones de actividad cerebral.</Text>
+      <View style={styles.profileGrid}>{[['Sesiones', progress.sessions],['Palabras', progress.wordsMastered],['Racha', progress.streak],['XP', progress.xp]].map(([label,value]) => <View style={styles.statCard} key={String(label)}><Text style={styles.statValue}>{value}</Text><Text style={styles.statLabel}>{label}</Text></View>)}</View>
+      <View style={styles.card}><Text style={styles.cardTitle}>Fase actual</Text><Text style={styles.bigCardTitle}>{phaseInfo.title}</Text><Text style={styles.cardText}>{phaseInfo.description}</Text></View>
+      <View style={styles.card}><Text style={styles.cardTitle}>Estrategias</Text>{(['context','audio','retrieval'] as Strategy[]).map(s => <View key={s} style={styles.strategyRow}><Text style={styles.strategyName}>{s === 'context' ? 'Contexto' : s === 'audio' ? 'Audio' : 'Recuperación'}</Text><Text style={styles.strategyScore}>{Math.round((stats[s].correct + 1) / (stats[s].attempts + 2) * 100)}%</Text></View>)}</View>
+      <View style={styles.card}><Text style={styles.cardTitle}>Mejor estrategia observada</Text><Text style={styles.bigCardTitle}>{best ? (best === 'context' ? 'Contexto' : best === 'audio' ? 'Audio' : 'Recuperación') : 'Aún sin datos suficientes'}</Text></View>
+    </ScrollView></SafeAreaView>;
+  }
+
+  if (screen === 'achievements') {
+    const filtered = ACHIEVEMENTS.filter(a => achievementFilter === 'all' || a.category === achievementFilter);
+    const unlocked = ACHIEVEMENTS.filter(a => getAchievementProgress(a.id, progress) >= a.target).length;
+    return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><ScrollView contentContainerStyle={styles.container}>
+      <View style={styles.topRow}><TouchableOpacity onPress={() => setScreen('home')}><Text style={styles.back}>‹</Text></TouchableOpacity><Text style={styles.logoSmall}>LÜ · LOGROS</Text></View>
+      <Text style={styles.title}>Logros</Text><Text style={styles.description}>{unlocked} / {ACHIEVEMENTS.length} desbloqueados.</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filters}>{[['all','Todos'],['inicio','Inicio'],['constancia','Constancia'],['memoria','Memoria'],['exploracion','Exploración']].map(([key,label]) => <TouchableOpacity key={key} onPress={() => setAchievementFilter(key)} style={[styles.filter, achievementFilter === key && styles.filterActive]}><Text style={[styles.filterText, achievementFilter === key && styles.filterTextActive]}>{label}</Text></TouchableOpacity>)}</ScrollView>
+      {filtered.map(a => { const value = getAchievementProgress(a.id, progress); const done = value >= a.target; return <View key={a.id} style={styles.achievementCard}><Text style={styles.achievementIcon}>{done ? a.icon : '🔒'}</Text><View style={styles.flex}><Text style={styles.achievementTitle}>{a.title}</Text><Text style={styles.cardText}>{a.description}</Text>{!done && <Text style={styles.achievementProgress}>{Math.min(value, a.target)} / {a.target}</Text>}</View></View>; })}
+    </ScrollView></SafeAreaView>;
+  }
+
+  return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><ScrollView contentContainerStyle={styles.container}>
+    <View style={styles.header}><View><Text style={styles.logo}>LÜ</Text><Text style={styles.logoSub}>LANGUAGE INTELLIGENCE</Text></View><View style={styles.headerActions}><TouchableOpacity style={styles.smallButton} onPress={() => setScreen('achievements')}><Text>🏆</Text></TouchableOpacity><TouchableOpacity style={styles.profileChip} onPress={() => setScreen('profile')}><Text style={styles.profileChipText}>Mi progreso</Text></TouchableOpacity></View></View>
+    <View style={styles.hero}><Text style={styles.eyebrow}>TU VIAJE DE APRENDIZAJE</Text><Text style={styles.title}>Descubre cómo aprendes idiomas.</Text><Text style={styles.description}>LÜ prueba estrategias, mide tu retención y adapta tu entrenamiento con tu propia evidencia.</Text></View>
+    <View style={styles.phaseCard}><Text style={styles.phaseTitle}>{phaseInfo.title}</Text><Text style={styles.phaseSub}>{phaseInfo.subtitle}</Text><Text style={styles.cardText}>{phaseInfo.description}</Text></View>
+    <View style={styles.progressCard}><View style={styles.progressTop}><View><Text style={styles.smallPurple}>NIVEL {progress.level}</Text><Text style={styles.levelTitle}>{progress.levelTitle}</Text></View><Text style={styles.xp}>{progress.xp} XP</Text></View><View style={styles.levelTrack}><View style={[styles.levelFill,{width:`${progress.levelProgress*100}%`}]} /></View><Text style={styles.levelCaption}>{progress.level === 6 ? 'Nivel máximo del MVP ✦' : `${Math.max(0, progress.nextLevelXp - progress.xp)} XP para el siguiente nivel`}</Text></View>
+    <View style={styles.profileGrid}><View style={styles.statCard}><Text style={styles.statValue}>{progress.streak}</Text><Text style={styles.statLabel}>días de racha</Text></View><View style={styles.statCard}><Text style={styles.statValue}>{progress.wordsMastered}</Text><Text style={styles.statLabel}>palabras</Text></View><View style={styles.statCard}><Text style={styles.statValue}>{progress.sessions}</Text><Text style={styles.statLabel}>sesiones</Text></View></View>
+    {pendingRetention && <TouchableOpacity style={styles.retentionCard} onPress={() => beginRetention(pendingRetention.sessionId)}><View style={styles.retentionIcon}><Text>↗</Text></View><View style={styles.flex}><Text style={styles.cardTitle}>{pendingRetention.horizon === 24 ? 'Medición de 24 horas' : 'Medición de 7 días'}</Text><Text style={styles.cardText}>Esta prueba es necesaria para saber qué retienes de verdad.</Text></View><Text style={styles.arrow}>›</Text></TouchableOpacity>}
+    <TouchableOpacity style={styles.primary} onPress={startLesson}><Text style={styles.primaryText}>{progress.sessions ? 'Continuar entrenando' : 'Comenzar experimento'}</Text><Text style={styles.primaryArrow}>→</Text></TouchableOpacity>
+    <TouchableOpacity style={styles.gamesButton} onPress={() => setScreen('games')}><Text style={styles.gamesIcon}>🎮</Text><View style={styles.flex}><Text style={styles.gamesTitle}>Laboratorio de juegos</Text><Text style={styles.gamesText}>Practica con audio, contexto, recuperación, patrones y comunicación.</Text></View><Text style={styles.arrow}>›</Text></TouchableOpacity>
+  </ScrollView></SafeAreaView>;
 }
-const styles=StyleSheet.create({safe:{flex:1,backgroundColor:'#FAF8FF'},container:{padding:22,paddingBottom:40},header:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:22},headerActions:{flexDirection:'row',alignItems:'center',gap:8},logo:{fontSize:34,fontWeight:'900',color:'#6D28D9',letterSpacing:-2},logoSub:{fontSize:9,fontWeight:'800',letterSpacing:2,color:'#8B5CF6',marginTop:-4},profileChip:{backgroundColor:'#E9D5FF',paddingHorizontal:12,paddingVertical:10,borderRadius:18},profileChipText:{color:'#5B21B6',fontWeight:'800',fontSize:12},achievementButton:{backgroundColor:'#FFFFFF',borderWidth:1,borderColor:'#DDD6FE',paddingHorizontal:10,paddingVertical:9,borderRadius:18,flexDirection:'row',alignItems:'center',gap:5},achievementButtonIcon:{fontSize:14},achievementButtonText:{fontSize:11,fontWeight:'800',color:'#5B21B6'},hero:{backgroundColor:'#EDE9FE',borderRadius:28,padding:24,marginBottom:16},moonBadge:{width:54,height:54,borderRadius:27,backgroundColor:'#FFFFFF',alignItems:'center',justifyContent:'center',marginBottom:18},moon:{fontSize:31,color:'#7C3AED'},eyebrow:{fontSize:10,fontWeight:'900',letterSpacing:1.5,color:'#7C3AED',marginBottom:7},title:{fontSize:29,fontWeight:'900',color:'#2E1065',lineHeight:34},description:{fontSize:14,lineHeight:21,color:'#5B556B',marginTop:9},progressCard:{backgroundColor:'#FFFFFF',borderRadius:22,padding:18,marginBottom:14,borderWidth:1,borderColor:'#E9D5FF'},progressTop:{flexDirection:'row',justifyContent:'space-between',alignItems:'center'},smallPurple:{fontSize:10,fontWeight:'900',color:'#8B5CF6'},levelTitle:{fontSize:18,fontWeight:'900',color:'#2E1065',marginTop:2},xp:{fontSize:18,fontWeight:'900',color:'#6D28D9'},levelTrack:{height:9,backgroundColor:'#EDE9FE',borderRadius:9,overflow:'hidden',marginTop:14},levelFill:{height:9,backgroundColor:'#7C3AED',borderRadius:9},levelCaption:{fontSize:11,color:'#777184',marginTop:8},miniGrid:{flexDirection:'row',gap:10,marginBottom:16},miniCard:{flex:1,backgroundColor:'#FFFFFF',borderRadius:20,padding:14,borderWidth:1,borderColor:'#EEE9F8'},miniIcon:{fontSize:18},miniValue:{fontSize:21,fontWeight:'900',color:'#4C1D95',marginTop:4},miniLabel:{fontSize:10,color:'#777184',marginTop:2},retentionCard:{backgroundColor:'#F5F3FF',borderRadius:20,padding:15,flexDirection:'row',alignItems:'center',marginBottom:16,borderWidth:1,borderColor:'#DDD6FE'},retentionIcon:{width:38,height:38,borderRadius:19,backgroundColor:'#DDD6FE',alignItems:'center',justifyContent:'center',marginRight:11},flex:{flex:1},arrow:{fontSize:28,color:'#7C3AED'},cardTitle:{fontSize:16,fontWeight:'900',color:'#2E1065'},cardText:{fontSize:12,color:'#777184',lineHeight:18,marginTop:3},primary:{backgroundColor:'#6D28D9',borderRadius:18,padding:17,flexDirection:'row',justifyContent:'center',alignItems:'center',marginTop:20},primaryText:{color:'#FFFFFF',fontSize:15,fontWeight:'900'},primaryArrow:{color:'#FFFFFF',fontSize:22,marginLeft:12},gamesButton:{backgroundColor:'#FFFFFF',borderRadius:20,padding:15,flexDirection:'row',alignItems:'center',marginTop:12,borderWidth:1,borderColor:'#DDD6FE'},gamesIcon:{fontSize:27,marginRight:12},gamesTitle:{fontSize:15,fontWeight:'900',color:'#2E1065'},gamesText:{fontSize:11,lineHeight:16,color:'#777184',marginTop:3},topHeader:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',marginBottom:20},back:{fontSize:38,color:'#6D28D9',fontWeight:'300'},trophyBadge:{width:44,height:44,borderRadius:22,backgroundColor:'#EDE9FE',alignItems:'center',justifyContent:'center'},trophy:{fontSize:20},achievementHero:{backgroundColor:'#6D28D9',borderRadius:28,padding:22,marginBottom:16},eyebrowLight:{fontSize:10,fontWeight:'900',letterSpacing:1.5,color:'#DDD6FE',marginBottom:7},achievementHeroTitle:{fontSize:31,fontWeight:'900',color:'#FFFFFF'},achievementHeroText:{fontSize:13,lineHeight:20,color:'#F5F3FF',marginTop:7},achievementCounter:{flexDirection:'row',alignItems:'baseline',marginTop:18},counterNumber:{fontSize:38,fontWeight:'900',color:'#FFFFFF'},counterSlash:{fontSize:18,fontWeight:'800',color:'#DDD6FE'},counterLabel:{fontSize:10,color:'#DDD6FE',marginTop:-3},collectionTrack:{height:7,backgroundColor:'#8B5CF6',borderRadius:7,overflow:'hidden',marginTop:12},collectionFill:{height:7,backgroundColor:'#FFFFFF',borderRadius:7},filters:{marginBottom:16},filter:{paddingHorizontal:15,paddingVertical:9,borderRadius:18,backgroundColor:'#FFFFFF',borderWidth:1,borderColor:'#E9D5FF',marginRight:8},filterActive:{backgroundColor:'#7C3AED',borderColor:'#7C3AED'},filterText:{fontSize:12,fontWeight:'800',color:'#6B5F78'},filterTextActive:{color:'#FFFFFF'},achievementCard:{backgroundColor:'#FFFFFF',borderRadius:20,padding:15,marginBottom:10,flexDirection:'row',borderWidth:1,borderColor:'#EEE9F8'},achievementUnlocked:{borderColor:'#C4B5FD',backgroundColor:'#FDFBFF'},achievementIcon:{width:56,height:56,borderRadius:18,backgroundColor:'#EDE9FE',alignItems:'center',justifyContent:'center',marginRight:13},lockedIcon:{backgroundColor:'#F1EFF5'},achievementTitleRow:{flexDirection:'row',alignItems:'center'},achievementTitle:{fontSize:15,fontWeight:'900',color:'#2E1065',flex:1},unlockedBadge:{backgroundColor:'#E9D5FF',paddingHorizontal:6,paddingVertical:4,borderRadius:8,marginLeft:5},unlockedText:{fontSize:7,fontWeight:'900',color:'#6D28D9'},achievementDescription:{fontSize:11,color:'#777184',lineHeight:17,marginTop:3},achievementTrack:{height:6,backgroundColor:'#EDE9FE',borderRadius:6,overflow:'hidden',marginTop:8},achievementFill:{height:6,backgroundColor:'#8B5CF6',borderRadius:6},achievementProgress:{fontSize:9,color:'#8B8495',marginTop:4},achievementTip:{backgroundColor:'#F5F3FF',borderRadius:20,padding:15,flexDirection:'row',marginTop:5},tipIcon:{fontSize:22,color:'#7C3AED',marginRight:12},tipTitle:{fontSize:14,fontWeight:'900',color:'#2E1065'},tipText:{fontSize:11,color:'#777184',lineHeight:17,marginTop:3},resultContainer:{flex:1,padding:24,justifyContent:'center'} });
+
+const styles = StyleSheet.create({
+  safe:{flex:1,backgroundColor:'#FAF8FF'},container:{padding:22,paddingBottom:45},header:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:20},headerActions:{flexDirection:'row',alignItems:'center',gap:8},logo:{fontSize:35,fontWeight:'900',color:'#6D28D9',letterSpacing:-2},logoSmall:{fontSize:22,fontWeight:'900',color:'#6D28D9'},logoSub:{fontSize:9,fontWeight:'800',letterSpacing:2,color:'#8B5CF6'},smallButton:{backgroundColor:'#FFF',borderWidth:1,borderColor:'#DDD6FE',padding:11,borderRadius:18},profileChip:{backgroundColor:'#E9D5FF',paddingHorizontal:12,paddingVertical:10,borderRadius:18},profileChipText:{color:'#5B21B6',fontWeight:'800',fontSize:12},hero:{backgroundColor:'#EDE9FE',borderRadius:28,padding:23,marginBottom:14},eyebrow:{fontSize:10,fontWeight:'900',letterSpacing:1.5,color:'#7C3AED',marginBottom:7},title:{fontSize:29,fontWeight:'900',color:'#2E1065',lineHeight:34},description:{fontSize:14,lineHeight:21,color:'#5B556B',marginTop:8},phaseCard:{backgroundColor:'#F5F3FF',borderRadius:20,padding:16,marginBottom:14,borderWidth:1,borderColor:'#DDD6FE'},phaseTitle:{fontSize:17,fontWeight:'900',color:'#4C1D95'},phaseSub:{fontSize:12,fontWeight:'800',color:'#7C3AED',marginTop:3},progressCard:{backgroundColor:'#FFF',borderRadius:22,padding:18,marginBottom:14,borderWidth:1,borderColor:'#E9D5FF'},progressTop:{flexDirection:'row',justifyContent:'space-between',alignItems:'center'},smallPurple:{fontSize:10,fontWeight:'900',color:'#8B5CF6'},levelTitle:{fontSize:18,fontWeight:'900',color:'#2E1065'},xp:{fontSize:18,fontWeight:'900',color:'#6D28D9'},levelTrack:{height:9,backgroundColor:'#EDE9FE',borderRadius:9,overflow:'hidden',marginTop:14},levelFill:{height:9,backgroundColor:'#7C3AED'},levelCaption:{fontSize:11,color:'#777184',marginTop:8},profileGrid:{flexDirection:'row',gap:10,marginBottom:15},statCard:{flex:1,backgroundColor:'#FFF',borderRadius:19,padding:14,borderWidth:1,borderColor:'#EEE9F8'},statValue:{fontSize:21,fontWeight:'900',color:'#4C1D95'},statLabel:{fontSize:10,color:'#777184',marginTop:3},retentionCard:{backgroundColor:'#F5F3FF',borderRadius:20,padding:15,flexDirection:'row',alignItems:'center',marginBottom:14,borderWidth:1,borderColor:'#DDD6FE'},retentionIcon:{width:38,height:38,borderRadius:19,backgroundColor:'#DDD6FE',alignItems:'center',justifyContent:'center',marginRight:11},flex:{flex:1},arrow:{fontSize:28,color:'#7C3AED'},cardTitle:{fontSize:15,fontWeight:'900',color:'#2E1065'},cardText:{fontSize:12,color:'#777184',lineHeight:18,marginTop:4},primary:{backgroundColor:'#6D28D9',borderRadius:18,padding:17,flexDirection:'row',justifyContent:'center',alignItems:'center',marginTop:6},primaryText:{color:'#FFF',fontSize:15,fontWeight:'900'},primaryArrow:{color:'#FFF',fontSize:22,marginLeft:12},gamesButton:{backgroundColor:'#FFF',borderRadius:20,padding:15,flexDirection:'row',alignItems:'center',marginTop:12,borderWidth:1,borderColor:'#E9D5FF'},gamesIcon:{fontSize:25,marginRight:12},gamesTitle:{fontSize:15,fontWeight:'900',color:'#2E1065'},gamesText:{fontSize:11,color:'#777184',lineHeight:17,marginTop:3},topRow:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',marginBottom:22},back:{fontSize:38,color:'#6D28D9',lineHeight:38},counter:{fontSize:12,fontWeight:'800',color:'#777184'},lessonPrompt:{fontSize:24,fontWeight:'900',color:'#2E1065',lineHeight:30,marginBottom:15},wordCard:{backgroundColor:'#FFF',borderRadius:23,padding:20,marginBottom:14,borderWidth:1,borderColor:'#E9D5FF'},context:{fontSize:12,color:'#777184',lineHeight:18},bigWord:{fontSize:30,fontWeight:'900',color:'#4C1D95',marginTop:8},hintText:{fontSize:12,color:'#777184',lineHeight:18,marginTop:8},option:{backgroundColor:'#FFF',borderWidth:1,borderColor:'#DDD6FE',borderRadius:17,padding:16,marginBottom:10},optionText:{fontSize:15,fontWeight:'800',color:'#2E1065',textAlign:'center'},correct:{backgroundColor:'#DCFCE7',borderColor:'#86EFAC'},wrong:{backgroundColor:'#FEE2E2',borderColor:'#FCA5A5'},hintButton:{padding:13,alignItems:'center'},hintButtonText:{color:'#6D28D9',fontWeight:'800'},feedback:{borderRadius:18,padding:15,marginTop:4},feedbackGood:{backgroundColor:'#ECFDF5'},feedbackBad:{backgroundColor:'#FFF1F2'},feedbackTitle:{fontSize:15,fontWeight:'900',color:'#2E1065'},feedbackText:{fontSize:12,color:'#5B556B',marginTop:4,lineHeight:18},resultHero:{backgroundColor:'#EDE9FE',borderRadius:28,padding:25,alignItems:'center',marginBottom:14},resultEmoji:{fontSize:32,color:'#7C3AED',marginBottom:10},resultTitle:{fontSize:55,fontWeight:'900',color:'#4C1D95'},filters:{marginBottom:14},filter:{paddingHorizontal:13,paddingVertical:9,borderRadius:17,backgroundColor:'#FFF',marginRight:7,borderWidth:1,borderColor:'#E9D5FF'},filterActive:{backgroundColor:'#6D28D9'},filterText:{fontSize:11,fontWeight:'800',color:'#5B556B'},filterTextActive:{color:'#FFF'},achievementCard:{backgroundColor:'#FFF',borderRadius:19,padding:15,flexDirection:'row',marginBottom:10,borderWidth:1,borderColor:'#EEE9F8'},achievementIcon:{fontSize:27,width:43,textAlign:'center',marginRight:10},achievementTitle:{fontSize:15,fontWeight:'900',color:'#2E1065'},achievementProgress:{fontSize:11,color:'#7C3AED',fontWeight:'800',marginTop:6},card:{backgroundColor:'#FFF',borderRadius:20,padding:17,marginBottom:12,borderWidth:1,borderColor:'#EEE9F8'},bigCardTitle:{fontSize:19,fontWeight:'900',color:'#4C1D95',marginTop:5},strategyRow:{flexDirection:'row',justifyContent:'space-between;paddingVertical:10;borderBottomWidth:1;borderBottomColor:#F1EEFA},strategyName:{fontSize:13,fontWeight:'700',color:'#5B556B'},strategyScore:{fontSize:13,fontWeight:'900',color:'#6D28D9'}
+});
