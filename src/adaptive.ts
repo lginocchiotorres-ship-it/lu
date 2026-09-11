@@ -85,12 +85,32 @@ export function strategyScore(stat: StrategyStats) {
   ))));
 }
 
+/**
+ * Returns strategy slots for the next lesson.
+ * Early on, LÜ explores all strategies equally. Once each has enough evidence,
+ * a clear leader receives two of the three slots, so the next session actually
+ * changes its composition instead of only changing the order.
+ */
 export function adaptiveOrder(data: LearningData): Strategy[] {
   const stats = getStats(data);
   const scored = STRATEGY_KEYS.map(key => ({ key, score: strategyScore(stats[key]), observations: stats[key].attempts }));
   const unexplored = scored.filter(item => item.observations < 8).sort((a, b) => a.observations - b.observations);
-  const explored = scored.filter(item => item.observations >= 8).sort((a, b) => b.score - a.score);
-  return [...unexplored, ...explored].map(item => item.key);
+
+  if (unexplored.length > 0) {
+    return [...unexplored, ...scored.filter(item => item.observations >= 8).sort((a, b) => b.score - a.score)]
+      .slice(0, 3)
+      .map(item => item.key);
+  }
+
+  const ranked = [...scored].sort((a, b) => b.score - a.score);
+  const leader = ranked[0];
+  const runnerUp = ranked[1];
+
+  // If the scores are close, keep all three strategies active rather than
+  // pretending that a small difference is meaningful.
+  if (leader.score - runnerUp.score < 5) return ranked.map(item => item.key);
+
+  return [leader.key, runnerUp.key, leader.key];
 }
 
 export function bestStrategy(data: LearningData): Strategy | null {
