@@ -2,6 +2,17 @@ export type Strategy = 'context' | 'audio' | 'retrieval';
 
 export type ExerciseType = 'context' | 'audio' | 'retrieval';
 
+export type LanguageCode = 'es' | 'en' | 'it' | 'fr' | 'de';
+
+export type LanguagePair = {
+  id: string;
+  source: LanguageCode;
+  target: LanguageCode;
+  sourceLabel: string;
+  targetLabel: string;
+  speechLocale: string;
+};
+
 export type Word = {
   id: string;
   word: string;
@@ -9,6 +20,8 @@ export type Word = {
   example: string;
   context: string;
   difficulty: 1 | 2 | 3;
+  sourceLanguage?: LanguageCode;
+  targetLanguage?: LanguageCode;
 };
 
 export type Answer = {
@@ -35,6 +48,7 @@ export type Session = {
   id: string;
   createdAt: number;
   answers: Answer[];
+  languagePairId?: string;
 };
 
 export type RetentionRecord = {
@@ -43,6 +57,7 @@ export type RetentionRecord = {
   completedAt: number | null;
   horizon: 24 | 168;
   answers: Answer[];
+  languagePairId?: string;
 };
 
 export type GameResult = {
@@ -56,10 +71,12 @@ export type GameResult = {
   selfReported?: boolean;
   helpUsed: boolean;
   createdAt: number;
+  languagePairId?: string;
 };
 
 export type LearningData = {
   sessions: Session[];
   retention: RetentionRecord[];
   gameResults?: GameResult[];
+  activeLanguagePairId?: string;
 };
