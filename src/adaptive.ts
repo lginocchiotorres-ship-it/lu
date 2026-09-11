@@ -51,9 +51,10 @@ export function getStats(data: LearningData): Record<Strategy, StrategyStats> {
     });
   });
 
-  // Games are additional immediate-performance observations.
-  // Delayed retention remains measured only by the dedicated retention tests.
+  // Objective game answers can inform immediate performance. Production games
+  // are intentionally excluded until LÜ has a real evaluator for language quality.
   (data.gameResults ?? []).forEach(result => {
+    if (result.production) return;
     const strategy = gameToStrategy(result.gameId);
     if (!strategy) return;
     const stat = stats[strategy];
@@ -79,20 +80,14 @@ export function strategyScore(stat: StrategyStats) {
   const hintRate = stat.attempts ? stat.totalHints / stat.attempts : 0;
   const hintPenalty = Math.min(0.12, hintRate * 0.025);
 
-  // Durable learning remains the strongest signal: 7-day > 24-hour > immediate.
   return Math.round(Math.max(0, Math.min(100, 100 * (
-    immediate * 0.20 +
-    r24 * 0.30 +
-    r7 * 0.40 +
-    speed * 0.10 -
-    hintPenalty
+    immediate * 0.20 + r24 * 0.30 + r7 * 0.40 + speed * 0.10 - hintPenalty
   ))));
 }
 
 export function adaptiveOrder(data: LearningData): Strategy[] {
   const stats = getStats(data);
   const scored = STRATEGY_KEYS.map(key => ({ key, score: strategyScore(stats[key]), observations: stats[key].attempts }));
-
   const unexplored = scored.filter(item => item.observations < 8).sort((a, b) => a.observations - b.observations);
   const explored = scored.filter(item => item.observations >= 8).sort((a, b) => b.score - a.score);
   return [...unexplored, ...explored].map(item => item.key);
@@ -100,9 +95,8 @@ export function adaptiveOrder(data: LearningData): Strategy[] {
 
 export function bestStrategy(data: LearningData): Strategy | null {
   const hasSessionData = data.sessions.some(session => session.answers.length > 0);
-  const hasGameData = (data.gameResults ?? []).length > 0;
-  if (!hasSessionData && !hasGameData) return null;
-
+  const hasObjectiveGameData = (data.gameResults ?? []).some(result => !result.production);
+  if (!hasSessionData && !hasObjectiveGameData) return null;
   const stats = getStats(data);
   return [...STRATEGY_KEYS].sort((a, b) => strategyScore(stats[b]) - strategyScore(stats[a]))[0];
 }
