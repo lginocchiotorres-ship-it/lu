@@ -52,8 +52,8 @@ export type GameResult = {
   responseMs: number;
   round: number;
   production: boolean;
-  /** True when the learner explicitly confirms the production was completed; not an AI quality score. */
-  selfReported: boolean;
+  /** Optional for backward compatibility with results already stored on the device. */
+  selfReported?: boolean;
   helpUsed: boolean;
   createdAt: number;
 };
