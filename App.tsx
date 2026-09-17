@@ -1,1 +1,1 @@
-export { default } from './src/LiveNewsHome2';
+export { default } from './src/LiveNewsHome';
