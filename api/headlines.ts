@@ -34,13 +34,55 @@ const TRUSTED_DOMAINS=[
  'who.int','paho.org','un.org','nasa.gov','nature.com','science.org'
 ];
 
+const SOURCE_TIERS:{domain:string;tier:number}[]=[
+ ...['reuters.com','apnews.com','bbc.com','bbc.co.uk','dw.com','france24.com','who.int','paho.org','un.org','nasa.gov','nature.com','science.org'].map(domain=>({domain,tier:3})),
+ ...['andina.pe','rpp.pe','elcomercio.pe','gestion.pe','gob.pe','bcrp.gob.pe','mef.gob.pe','minsa.gob.pe','minem.gob.pe','midagri.gob.pe','mtc.gob.pe','indeci.gob.pe','senamhi.gob.pe','produce.gob.pe','sunat.gob.pe','inei.gob.pe'].map(domain=>({domain,tier:3})),
+ ...['theguardian.com','npr.org','pbs.org','aljazeera.com'].map(domain=>({domain,tier:2}))
+];
+
 const clean=(v:string)=>v.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
 const stripDomain=(url:string)=>{try{return new URL(url).hostname.replace(/^www\./,'')}catch{return ''}};
 const normalize=(s:string)=>s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+const domainTier=(url:string)=>{const d=stripDomain(url);return SOURCE_TIERS.find(x=>d===x.domain||d.endsWith('.'+x.domain))?.tier||0};
+const isTrusted=(url:string)=>domainTier(url)>0;
 
 type Headline={topic:string;title:string;description:string;source:string;published:string;url:string;sourceVerified:boolean;corroborationCount:number;relevanceScore:number};
 
-function isTrusted(url:string){const d=stripDomain(url);return TRUSTED_DOMAINS.some(x=>d===x||d.endsWith('.'+x));}
+const TOPIC_TERMS:Record<string,string[]>={
+ 'PERÚ':['peru','perú','lima','ministerio','gobierno','congreso','bcrp','economia','seguridad'],
+ 'INTERNACIONAL':['international','world','global','geopolitics','united','europe','asia','china','usa'],
+ 'INGENIERÍA':['ingenieria','infraestructura','obra','construccion','automatizacion','robotica','cad','software'],
+ 'LOGÍSTICA':['logistica','suministro','almacen','stock','trazabilidad','puerto','distribucion','cadena'],
+ 'TRANSPORTE':['transporte','puerto','aereo','maritimo','terrestre','movilidad','trafico','vehiculo'],
+ 'SALUD':['salud','hospital','medicina','epidemia','vacuna','sanitario','paciente'],
+ 'NUTRICIÓN':['nutricion','alimento','alimentacion','inocuidad','superalimento','etiquetado'],
+ 'AGROINDUSTRIAL':['agro','agricola','agroexport','cosecha','cultivo','fitosanitario','campo'],
+ 'FINANCIERO Y BANCA':['banca','inflacion','tasa','credito','divisa','dolar','mercado','bolsa'],
+ 'ENERGÍA Y MINERÍA':['energia','mineria','petroleo','gas','mineral','solar','hidrica','litio'],
+ 'TECNOLOGÍA E IA':['tecnologia','inteligencia artificial','ia','software','hardware','ciberseguridad'],
+ 'MANUFACTURA E INDUSTRIA':['manufactura','industria','produccion','calidad','lean','six sigma','seguridad industrial'],
+ 'COMERCIO EXTERIOR':['comercio','exportacion','importacion','aduana','arancel','tlc','tratado'],
+ 'POLÍTICO Y GUBERNAMENTAL':['politica','gobierno','ley','reforma','eleccion','ministerio','congreso'],
+ 'BIOTECNOLOGÍA Y CIENCIAS':['biotecnologia','ciencia','genoma','genomica','investigacion','farmaco','bioproceso'],
+ 'ENTRETENIMIENTO Y CULTURA':['cultura','cine','musica','arte','espectaculo','television'],
+ 'DEPORTES':['deporte','futbol','liga','torneo','atleta','campeonato','olimpico']
+};
+
+const IMPACT_TERMS=['aprueba','aprobó','anuncia','anunció','entra en vigor','nueva ley','regulación','crisis','emergencia','alerta','acuerdo','inversión','millones','récord','descubre','descubrimiento','fallece','accidente','retiro','sanción','cambio','sube','baja','reforma'];
+
+function relevance(item:Headline){
+ const text=normalize(item.title+' '+item.description);
+ const terms=TOPIC_TERMS[item.topic]||[];
+ const topicHits=terms.filter(t=>text.includes(normalize(t))).length;
+ const impactHits=IMPACT_TERMS.filter(t=>text.includes(normalize(t))).length;
+ const ageHours=Math.max(0,(Date.now()-new Date(item.published).getTime())/3600000);
+ const freshness=Number.isFinite(ageHours)?Math.max(0,30-ageHours*2.5):0;
+ const source=domainTier(item.url);
+ const trust=source?source*10:0;
+ const specificity=Math.min(15,topicHits*3);
+ const impact=Math.min(15,impactHits*3);
+ return Math.round(freshness+trust+specificity+impact);
+}
 
 function dedupeAndRank(items:Headline[]){
  const groups:Headline[][]=[];
@@ -55,20 +97,11 @@ function dedupeAndRank(items:Headline[]){
  }
  return groups.map(g=>{
   const sources=[...new Set(g.map(x=>x.source).filter(Boolean))];
-  const best=g.slice().sort((a,b)=>{
-   const trust=Number(b.sourceVerified)-Number(a.sourceVerified);
-   return trust!==0?trust:b.relevanceScore-a.relevanceScore;
-  })[0];
-  return {...best,corroborationCount:sources.length};
+  const best=g.slice().sort((a,b)=>b.relevanceScore-a.relevanceScore)[0];
+  const corroborationBonus=Math.min(15,Math.max(0,sources.length-1)*5);
+  return {...best,corroborationCount:sources.length,relevanceScore:best.relevanceScore+corroborationBonus};
  }).filter(x=>x.sourceVerified||x.corroborationCount>=2)
    .sort((a,b)=>b.relevanceScore-a.relevanceScore).slice(0,24);
-}
-
-function score(item:Headline){
- const age=Math.max(0,(Date.now()-new Date(item.published).getTime())/3600000);
- const freshness=Number.isFinite(age)?Math.max(0,35-age*3):0;
- const verified=item.sourceVerified?35:0;
- return Math.round(freshness+verified);
 }
 
 async function newsApiFeed(f:Feed,apiKey:string):Promise<Headline[]>{
@@ -113,10 +146,10 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
   const groups=apiKey
    ?await Promise.all(feeds.map(f=>newsApiFeed(f,apiKey)))
    :await Promise.all(feeds.map(gdeltFeed));
-  const raw=groups.flat().map(x=>({...x,relevanceScore:score(x)}));
+  const raw=groups.flat().map(x=>({...x,relevanceScore:relevance(x)}));
   const headlines=dedupeAndRank(raw);
   return res.status(200).setHeader('Cache-Control','s-maxage=300, stale-while-revalidate=600')
-   .json({headlines,provider:apiKey?'NewsAPI':'GDELT',sourcePolicy:'trusted-domain allowlist + freshness + duplicate clustering + multi-source corroboration'});
+   .json({headlines,provider:apiKey?'NewsAPI':'GDELT',sourcePolicy:'relevance engine: freshness + source trust + sector match + impact signals + duplicate clustering + corroboration'});
  }catch(error){
   console.error('Headlines endpoint error',error);
   return res.status(502).json({error:'Could not load curated live news.'});
