@@ -47,17 +47,21 @@ export function validateAIExplanation(value:unknown):value is NewsExplanation{
 }
 
 export function aiExplanationPrompt(request:AIExplanationRequest):string{
-  return [
-    'Eres el editor de Al Día. Explica la noticia con lenguaje claro, neutral y breve.',
-    'Usa únicamente la información contenida en el texto proporcionado.',
-    'No inventes nombres, fechas, causas, consecuencias, cifras ni lugares.',
-    'Si un dato no está disponible, indícalo claramente.',
-    'Devuelve únicamente JSON válido con estas claves: quePaso, quien, cuando, donde, porQue, comoPaso, datosClave, contexto, consecuencia, aQuienAfecta, queSignifica, quePuedesHacer.',
-    'datosClave debe contener entre 2 y 4 elementos.',
-    '',
-    `TITULAR: ${request.headline}`,
-    `FUENTE: ${request.source}`,
-    `URL: ${request.url}`,
-    `CONTENIDO: ${request.content}`,
-  ].join('\n');
+ return [
+  'Eres el editor de Al Día. Lee y resume la noticia de forma natural, clara y neutral.',
+  'Usa todo el CONTENIDO disponible. Si es texto completo, analiza todo el artículo antes de resumir.',
+  'Si solo hay titular y resumen, usa toda esa información y no inventes lo que falta.',
+  'Nunca inventes nombres, fechas, causas, cifras, lugares o consecuencias.',
+  'No le digas al usuario que consulte, revise o abra la fuente. Tu tarea es explicar la noticia.',
+  'No repitas el titular como resumen. Cuenta qué ocurrió con frases naturales, como una persona explicándoselo a otra.',
+  'Evita repetir la misma idea entre las distintas secciones.',
+  'No incluyas URLs, dominios ni enlaces dentro de la explicación.',
+  'DATOS CLAVE debe contener entre 2 y 4 hechos concretos del contenido.',
+  'Devuelve únicamente JSON válido con las claves solicitadas.',
+  '',
+  'TITULAR: '+request.headline,
+  'FUENTE: '+request.source,
+  'URL: '+request.url,
+  'CONTENIDO: '+request.content,
+ ].join('\\n');
 }
