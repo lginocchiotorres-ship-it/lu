@@ -1,50 +1,56 @@
 import {LiveHeadline} from './liveNews';
 
-export type NewsExplanation={
-  quePaso:string;
-  quien:string;
-  cuando:string;
-  donde:string;
-  porQue:string;
-  comoPaso:string;
-  datosClave:string[];
-  contexto:string;
-  consecuencia:string;
-  aQuienAfecta:string;
-  queSignifica:string;
-  quePuedesHacer:string;
-};
+export type NewsExplanation={quePaso:string;quien:string;cuando:string;donde:string;porQue:string;comoPaso:string;datosClave:string[];contexto:string;consecuencia:string;aQuienAfecta:string;queSignifica:string;quePuedesHacer:string;};
 
-const clean=(s:string)=>s.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+const clean=(s:string)=>s.replace(/<[^>]*>/g,' ').replace(/&nbsp;/gi,' ').replace(/&amp;/g,'&').replace(/https?:\/\/\S+/gi,' ').replace(/\s+/g,' ').trim();
+const sentence=(s:string)=>s.replace(/[🔴🔵🟢🟡🟠🟣⚫⚪🔺🔻⬇⬆➡⬅]/g,' ').replace(/\s+/g,' ').trim();
 
-/**
- * Builds a safe explanation from information actually present in the live feed.
- * It deliberately leaves unsupported fields explicit instead of inventing facts.
- * A future server-side source extractor/AI layer can replace this mapper without
- * changing the detail-screen contract.
- */
+function extractMatchInfo(title:string){
+ const t=sentence(clean(title));
+ const teams=t.match(/(Perú|Argentina|Brasil|Chile|Colombia|Ecuador|Bolivia|Uruguay|Paraguay|Venezuela|México|España|Francia|Italia|Alemania)\s+vs\.?\s+(Perú|Argentina|Brasil|Chile|Colombia|Ecuador|Bolivia|Uruguay|Paraguay|Venezuela|México|España|Francia|Italia|Alemania)/i);
+ const stage=t.match(/(semifinal(?:es)?|final|cuartos de final|octavos de final)/i)?.[1];
+ const event=t.match(/(Juegos Suramericanos[^,.:!?]*)/i)?.[1];
+ return{t,teams:teams?.[0],stage,event};
+}
+
 export function explainHeadline(n:LiveHeadline):NewsExplanation{
- const summary=clean(n.description);
- const source=n.source||'la fuente original';
+ const info=extractMatchInfo(n.title);
+ const summary=sentence(clean(n.description));
  const when=n.published?new Date(n.published).toLocaleString('es-PE',{dateStyle:'medium',timeStyle:'short'}):'Fecha no disponible';
- const where=n.topic==='PERÚ'?'Perú':'No indicado en el resumen disponible';
+ const where=n.topic==='PERÚ'?'Perú':'No indicado en la información disponible';
+ if(info.teams){
+  const parts=info.teams.split(/\s+vs\.?\s+/i);
+  const stageText=info.stage?' por '+info.stage:'';
+  const eventText=info.event?' en '+info.event:'';
+  return{
+   quePaso:info.teams+' se enfrentan'+stageText+eventText+'. La publicación informa sobre el partido y ofrece información para seguirlo en vivo.',
+   quien:'Las selecciones de '+parts[0]+' y '+parts[1]+' son las protagonistas del partido.',
+   cuando:when,
+   donde:where,
+   porQue:'El partido corresponde a '+(info.stage||'una instancia de competencia')+(info.event?' de '+info.event:'')+'.',
+   comoPaso:'La noticia presenta el encuentro como un partido entre '+info.teams+(info.stage?' por '+info.stage:'')+' y señala que existe información para seguir la transmisión.',
+   datosClave:['Partido: '+info.teams,...(info.stage?['Instancia: '+info.stage]:[]),...(info.event?['Competencia: '+info.event]:[])],
+   contexto:'El encuentro forma parte de la competencia indicada en la publicación. La nota está enfocada en la hora y las opciones para seguir el partido.',
+   consecuencia:'El resultado del partido determinará el avance de los equipos en esta instancia de la competencia.',
+   aQuienAfecta:'Principalmente a las selecciones participantes y a quienes siguen la competencia.',
+   queSignifica:'Es un partido de '+(info.stage||'competencia')+' entre '+info.teams+', dentro de '+(info.event||'la competición mencionada en la noticia')+'.',
+   quePuedesHacer:'Si quieres seguir el encuentro, revisa la hora y el medio de transmisión indicados en la publicación.'
+  };
+ }
+ const useful=summary||sentence(clean(n.title));
  return{
-  quePaso:summary||'La noticia está disponible en la fuente original, pero el feed no entregó un resumen suficiente.',
-  quien:'El resumen disponible no identifica de forma suficiente a todos los protagonistas.',
-  cuando:when,
-  donde:where,
-  porQue:'El motivo o las causas requieren revisar el contenido completo de la fuente original.',
-  comoPaso:'El resumen del feed no contiene suficientes detalles para reconstruir la secuencia de hechos sin riesgo de inventar información.',
-  datosClave:[`Fuente: ${source}`,`Publicado: ${when}`,...(summary?[`Resumen: ${summary}`]:[])],
-  contexto:'Esta explicación usa únicamente los datos recibidos desde el feed de noticias. Los detalles adicionales deben verificarse en la publicación original.',
-  consecuencia:'El impacto o las consecuencias no pueden determinarse con precisión a partir del resumen disponible.',
-  aQuienAfecta:'No está suficientemente especificado en el resumen disponible.',
-  queSignifica:'El significado de la noticia depende de su desarrollo completo, los datos publicados y el contexto aportado por la fuente.',
-  quePuedesHacer:'Abrir la fuente original para consultar el desarrollo completo y los datos que no aparecen en el resumen.'
+  quePaso:useful||'La noticia informa sobre un hecho reciente.',
+  quien:'Los protagonistas no están claramente identificados en la información disponible.',
+  cuando:when,donde:where,
+  porQue:'La causa o el motivo no aparecen de forma suficiente en la información disponible.',
+  comoPaso:'La información recibida resume el hecho, pero no explica toda la secuencia de acontecimientos.',
+  datosClave:[...(n.title?['Tema: '+sentence(clean(n.title))]:[]),...(summary&&summary!==n.title?['Resumen: '+summary]:[]), 'Publicado: '+when],
+  contexto:'La noticia corresponde al tema y fecha indicados en el feed.',
+  consecuencia:'Las consecuencias específicas no están indicadas en la información disponible.',
+  aQuienAfecta:'No se puede determinar con precisión a partir de la información disponible.',
+  queSignifica:'La noticia informa sobre '+sentence(clean(n.title)).replace(/[.:]+$/,'')+'.',
+  quePuedesHacer:'Si necesitas confirmar un detalle específico, consulta la publicación enlazada.'
  };
 }
 
-export function explanationForAudio(n:LiveHeadline){
- const e=explainHeadline(n);
- return `Al Día. ${n.title}. ${e.quePaso} ${e.queSignifica} Fuente: ${n.source}.`;
-}
+export function explanationForAudio(n:LiveHeadline){const e=explainHeadline(n);return 'Al Día. '+sentence(n.title)+'. '+e.quePaso+' '+e.queSignifica;}
