@@ -3,9 +3,11 @@ import type { VercelRequest,VercelResponse } from '@vercel/node';
 type Feed={topic:string;q:string;domains?:string[]};
 
 const BASE_FEEDS:Feed[]=[
- {topic:'PERÚ',q:'Perú gobierno economía sociedad seguridad infraestructura'},
- {topic:'INTERNACIONAL',q:'international breaking world news geopolitics economy'}
+ {topic:'PERÚ',q:'Perú gobierno economía sociedad seguridad infraestructura',domains:['rpp.pe','elcomercio.pe','gestion.pe','andina.pe','gob.pe']},
+ {topic:'INTERNACIONAL',q:'international breaking world news geopolitics economy',domains:['reuters.com','apnews.com','bbc.com','bbc.co.uk','dw.com','france24.com','un.org']}
 ];
+
+const VERIFIED_GENERAL=['rpp.pe','elcomercio.pe','gestion.pe','andina.pe','reuters.com','apnews.com','bbc.com','bbc.co.uk','dw.com','france24.com','theguardian.com','npr.org','pbs.org','aljazeera.com','gob.pe','bcrp.gob.pe','mef.gob.pe','minsa.gob.pe','minem.gob.pe','midagri.gob.pe','mtc.gob.pe','indeci.gob.pe','senamhi.gob.pe','produce.gob.pe','sunat.gob.pe','inei.gob.pe','who.int','paho.org','un.org','nasa.gov','nature.com','science.org'];
 
 const SECTOR_FEEDS:Feed[]=[
  {topic:'INGENIERÍA',q:'ingeniería infraestructura megaproyectos automatización procesos CAD software modelado'},
@@ -143,11 +145,22 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
  const feeds=selected?[selected,...BASE_FEEDS]:[...BASE_FEEDS,...SECTOR_FEEDS];
  const apiKey=process.env.NEWS_API_KEY;
  try{
-  const groups=apiKey
-   ?await Promise.all(feeds.map(f=>newsApiFeed(f,apiKey)))
-   :await Promise.all(feeds.map(gdeltFeed));
+  const loadFeed=async(f:Feed):Promise<Headline[]>=>{
+  if(apiKey){
+    try{
+      const items=await newsApiFeed({...f,domains:f.domains||VERIFIED_GENERAL},apiKey);
+      if(items.length)return items;
+    }catch(error){console.warn('NewsAPI feed failed, using GDELT',f.topic,error);}
+  }
+  try{return await gdeltFeed(f);}catch(error){console.warn('GDELT feed failed',f.topic,error);return [];}
+ };
+  const groups=await Promise.all(feeds.map(loadFeed));
   const raw=groups.flat().map(x=>({...x,relevanceScore:relevance(x)}));
-  const headlines=dedupeAndRank(raw);
+  let headlines=dedupeAndRank(raw);
+  if(!headlines.length){
+    const fallback=await Promise.all(BASE_FEEDS.map(f=>gdeltFeed(f).catch(()=>[])));
+    headlines=dedupeAndRank(fallback.flat().map(x=>({...x,relevanceScore:relevance(x)})));
+  }
   return res.status(200).setHeader('Cache-Control','s-maxage=300, stale-while-revalidate=600')
    .json({headlines,provider:apiKey?'NewsAPI':'GDELT',sourcePolicy:'relevance engine: freshness + source trust + sector match + impact signals + duplicate clustering + corroboration'});
  }catch(error){
