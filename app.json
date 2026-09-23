@@ -4,9 +4,6 @@
     "slug": "novo",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.svg",
-    "web": {
-      "favicon": "./assets/icon.svg"
-    }
+    "icon": "./assets/icon.svg"
   }
 }
