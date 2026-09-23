@@ -3,10 +3,8 @@ import type { VercelRequest,VercelResponse } from '@vercel/node';
 type Feed={topic:string;q:string};
 
 const BASE_FEEDS:Feed[]=[
- {topic:'PERÚ',q:'Perú when:1d'},
- {topic:'INTERNACIONAL',q:'world news when:1d'},
- {topic:'IA',q:'artificial intelligence when:1d'},
- {topic:'CURIOSIDADES',q:'science interesting facts when:1d'}
+ {topic:'PERÚ',q:'Perú noticias when:1d'},
+ {topic:'INTERNACIONAL',q:'world news when:1d'}
 ];
 
 const SECTOR_FEEDS:Feed[]=[
@@ -36,7 +34,7 @@ async function feed(f:Feed){
   items.push(xml.slice(start,end+7));
   cursor=end+7;
  }
- return items.slice(0,4).map(item=>({
+ return items.slice(0,8).map(item=>({
   topic:f.topic,
   title:clean(tag(item,'title')),
   description:clean(tag(item,'description')),
@@ -50,7 +48,7 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
  if(req.method!=='GET')return res.status(405).json({error:'Method not allowed'});
  const sector=typeof req.query.sector==='string'?req.query.sector:undefined;
  const selected=SECTOR_FEEDS.find(f=>f.topic===sector);
- const feeds=selected?[...BASE_FEEDS,selected]:[...BASE_FEEDS,...SECTOR_FEEDS];
+ const feeds=selected?[selected,...BASE_FEEDS]:[...BASE_FEEDS,...SECTOR_FEEDS];
  try{
   const groups=await Promise.all(feeds.map(feed));
   const headlines=groups.flat();
