@@ -34,22 +34,19 @@ const TRUSTED_DOMAINS=[
  'who.int','paho.org','un.org','nasa.gov','nature.com','science.org'
 ];
 
-const esc=(v:string)=>v.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#39;/g,"'").replace(/&quot;/g,'"');
 const clean=(v:string)=>v.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
 const stripDomain=(url:string)=>{try{return new URL(url).hostname.replace(/^www\./,'')}catch{return ''}};
 const normalize=(s:string)=>s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
 
 type Headline={topic:string;title:string;description:string;source:string;published:string;url:string;sourceVerified:boolean;corroborationCount:number;relevanceScore:number};
 
-function clusterKey(title:string){
- const words=normalize(title).split(' ').filter(w=>w.length>3);
- return words.slice(0,8).join(' ');
-}
-function dedupeAndRank(items:Headline[],topic:string){
+function isTrusted(url:string){const d=stripDomain(url);return TRUSTED_DOMAINS.some(x=>d===x||d.endsWith('.'+x));}
+
+function dedupeAndRank(items:Headline[]){
  const groups:Headline[][]=[];
  for(const item of items){
   const words=new Set(normalize(item.title).split(' ').filter(w=>w.length>3));
-  let found=groups.find(g=>{
+  const found=groups.find(g=>{
    const base=new Set(normalize(g[0].title).split(' ').filter(w=>w.length>3));
    const common=[...words].filter(w=>base.has(w)).length;
    return common>=4 || (common>=3 && common/Math.max(1,Math.min(words.size,base.size))>=.55);
@@ -57,26 +54,27 @@ function dedupeAndRank(items:Headline[],topic:string){
   if(found)found.push(item);else groups.push([item]);
  }
  return groups.map(g=>{
-  const best=g.slice().sort((a,b)=>b.relevanceScore-a.relevanceScore)[0];
-  const sources=[...new Set(g.map(x=>x.source))];
-  return {...best,corroborationCount:sources.length,title:best.title};
- }).sort((a,b)=>b.relevanceScore-a.relevanceScore).slice(0,24);
+  const sources=[...new Set(g.map(x=>x.source).filter(Boolean))];
+  const best=g.slice().sort((a,b)=>{
+   const trust=Number(b.sourceVerified)-Number(a.sourceVerified);
+   return trust!==0?trust:b.relevanceScore-a.relevanceScore;
+  })[0];
+  return {...best,corroborationCount:sources.length};
+ }).filter(x=>x.sourceVerified||x.corroborationCount>=2)
+   .sort((a,b)=>b.relevanceScore-a.relevanceScore).slice(0,24);
 }
 
-function score(item:{title:string;description:string;published:string;sourceVerified:boolean},topic:string){
+function score(item:Headline){
  const age=Math.max(0,(Date.now()-new Date(item.published).getTime())/3600000);
  const freshness=Number.isFinite(age)?Math.max(0,35-age*3):0;
  const verified=item.sourceVerified?35:0;
- const topicWords=new Set(normalize(topic).split(' ').filter(w=>w.length>3));
- const text=normalize(item.title+' '+item.description);
- const match=[...topicWords].filter(w=>text.includes(w)).length;
- return Math.round(freshness+verified+Math.min(20,match*5));
+ return Math.round(freshness+verified);
 }
 
 async function newsApiFeed(f:Feed,apiKey:string):Promise<Headline[]>{
  const params=new URLSearchParams({
   q:f.q,
-  language:'es',
+  language:f.topic==='INTERNACIONAL'?'en':'es',
   from:new Date(Date.now()-36*3600000).toISOString(),
   sortBy:'publishedAt',
   pageSize:'30'
@@ -88,26 +86,20 @@ async function newsApiFeed(f:Feed,apiKey:string):Promise<Headline[]>{
  if(data.status!=='ok')throw new Error(data.message||'NewsAPI error');
  return (data.articles||[]).map((a:any)=>({
   topic:f.topic,title:clean(a.title||''),description:clean(a.description||''),source:clean(a.source?.name||''),
-  published:a.publishedAt||'',url:a.url||'',
-  sourceVerified:TRUSTED_DOMAINS.some(d=>stripDomain(a.url||'')===d||stripDomain(a.url||'').endsWith('.'+d)),
-  corroborationCount:1,relevanceScore:0
+  published:a.publishedAt||'',url:a.url||'',sourceVerified:isTrusted(a.url||''),corroborationCount:1,relevanceScore:0
  })).filter((x:Headline)=>x.title&&x.url);
 }
 
 async function gdeltFeed(f:Feed):Promise<Headline[]>{
  const terms=f.q.split(' ').filter(Boolean).slice(0,8).map(x=>x.includes(' ')?'"'+x+'"':x).join(' OR ');
- const query=f.topic==='PERÚ'
-  ? '('+terms+') sourcecountry:peru'
-  : f.topic==='INTERNACIONAL' ? '('+terms+')' : '('+terms+')';
+ const query='('+terms+')'+(f.topic==='PERÚ'?' sourcecountry:peru':'');
  const url='https://api.gdeltproject.org/api/v2/doc/doc?query='+encodeURIComponent(query)+'&mode=artlist&maxrecords=40&timespan=36h&sort=datedesc&format=json';
- const r=await fetch(url); if(!r.ok)throw new Error('GDELT '+r.status);
+ const r=await fetch(url);if(!r.ok)throw new Error('GDELT '+r.status);
  const data=await r.json();
- const articles=data.articles||[];
- return articles.map((a:any)=>({
+ return (data.articles||[]).map((a:any)=>({
   topic:f.topic,title:clean(a.title||''),description:'',source:clean(a.domain||a.sourcecountry||''),
   published:a.seendate?String(a.seendate).replace(/(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/,'$1-$2-$3T$4:$5:$6Z'):'',
-  url:a.url||'',sourceVerified:TRUSTED_DOMAINS.some(d=>stripDomain(a.url||'')===d||stripDomain(a.url||'').endsWith('.'+d)),
-  corroborationCount:1,relevanceScore:0
+  url:a.url||'',sourceVerified:isTrusted(a.url||''),corroborationCount:1,relevanceScore:0
  })).filter((x:Headline)=>x.title&&x.url);
 }
 
@@ -118,17 +110,13 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
  const feeds=selected?[selected,...BASE_FEEDS]:[...BASE_FEEDS,...SECTOR_FEEDS];
  const apiKey=process.env.NEWS_API_KEY;
  try{
-  let groups:Headline[][];
-  let provider='GDELT';
-  if(apiKey){
-   groups=await Promise.all(feeds.map(f=>newsApiFeed(f,apiKey)));
-   provider='NewsAPI';
-  }else{
-   groups=await Promise.all(feeds.map(gdeltFeed));
-  }
-  const raw=groups.flat().map(x=>({...x,relevanceScore:score(x,x.topic)}));
-  const headlines=dedupeAndRank(raw,sector||'PERÚ');
-  return res.status(200).setHeader('Cache-Control','s-maxage=300, stale-while-revalidate=600').json({headlines,provider,sourcePolicy:'trusted-domain-allowlist + freshness + relevance + cross-source clustering'});
+  const groups=apiKey
+   ?await Promise.all(feeds.map(f=>newsApiFeed(f,apiKey)))
+   :await Promise.all(feeds.map(gdeltFeed));
+  const raw=groups.flat().map(x=>({...x,relevanceScore:score(x)}));
+  const headlines=dedupeAndRank(raw);
+  return res.status(200).setHeader('Cache-Control','s-maxage=300, stale-while-revalidate=600')
+   .json({headlines,provider:apiKey?'NewsAPI':'GDELT',sourcePolicy:'trusted-domain allowlist + freshness + duplicate clustering + multi-source corroboration'});
  }catch(error){
   console.error('Headlines endpoint error',error);
   return res.status(502).json({error:'Could not load curated live news.'});
