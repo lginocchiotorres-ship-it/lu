@@ -35,11 +35,10 @@ async function directFeed(f:{topic:string;q:string}){
 export async function fetchLiveHeadlines(sector?:string):Promise<LiveHeadline[]>{
  const selected=SECTOR_FEEDS.find(f=>f.topic===sector);
  const feeds=selected?[...BASE_FEEDS,selected]:[...BASE_FEEDS,...SECTOR_FEEDS];
- const webEndpoint=typeof window!=='undefined'?'/api/headlines':'';
- const endpointBase=webEndpoint||API_BASE;
+ const endpointBase=typeof window!=='undefined'?'/api/headlines':(API_BASE?API_BASE+'/api/headlines':'');
  if(endpointBase){
   try{
-   const endpoint=endpointBase+'/api/headlines'+(sector?'?sector='+encodeURIComponent(sector):'');
+   const endpoint=endpointBase+(sector?'?sector='+encodeURIComponent(sector):'');
    const response=await fetch(endpoint);
    if(response.ok){
     const data=await response.json();
