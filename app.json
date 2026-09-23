@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "Al Día",
+    "slug": "al-dia",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.svg",
+    "web": {
+      "favicon": "./assets/icon.svg"
+    }
+  }
+}
