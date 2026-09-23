@@ -15,34 +15,36 @@ const SECTOR_FEEDS:{topic:string;q:string}[]=[
  {topic:'ECONOMÍA',q:'economía inflación empleo mercados Perú when:1d'}
 ];
 
+const API_BASE=(process.env.EXPO_PUBLIC_API_BASE_URL||'').replace(/\/$/,'');
 const esc=(v:string)=>v.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#39;/g,"'").replace(/&quot;/g,'"');
 const tag=(xml:string,name:string)=>{const m=xml.match(new RegExp('<'+name+'[^>]*>([\\s\\S]*?)</'+name+'>','i'));return m?esc(m[1].replace(/<!\\[CDATA\\[|\\]\\]>/g,'').trim()):''};
 const clean=(v:string)=>v.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
 
+async function directFeed(f:{topic:string;q:string}){
+ const url='https://news.google.com/rss/search?q='+encodeURIComponent(f.q)+'&hl=es-419&gl=PE&ceid=PE:es-419';
+ const r=await fetch(url); if(!r.ok)return [];
+ const xml=await r.text(); const items:string[]=[]; let cursor=0;
+ while(true){
+  const start=xml.indexOf('<item>',cursor); if(start===-1)break;
+  const end=xml.indexOf('</item>',start); if(end===-1)break;
+  items.push(xml.slice(start,end+7)); cursor=end+7;
+ }
+ return items.slice(0,4).map(item=>({topic:f.topic,title:clean(tag(item,'title')),description:clean(tag(item,'description')),source:clean(tag(item,'source'))||'Google News',published:tag(item,'pubDate'),url:tag(item,'link')})).filter(x=>x.title);
+}
+
 export async function fetchLiveHeadlines(sector?:string):Promise<LiveHeadline[]>{
  const selected=SECTOR_FEEDS.find(f=>f.topic===sector);
  const feeds=selected?[...BASE_FEEDS,selected]:[...BASE_FEEDS,...SECTOR_FEEDS];
- const out:LiveHeadline[]=[];
- for(const f of feeds){
+ if(API_BASE){
   try{
-   const url='https://news.google.com/rss/search?q='+encodeURIComponent(f.q)+'&hl=es-419&gl=PE&ceid=PE:es-419';
-   const r=await fetch(url); if(!r.ok) continue;
-   const xml=await r.text();
-   const items:string[]=[];
-   let cursor=0;
-   while(true){
-    const start=xml.indexOf('<item>',cursor);
-    if(start===-1) break;
-    const end=xml.indexOf('</item>',start);
-    if(end===-1) break;
-    items.push(xml.slice(start,end+7));
-    cursor=end+7;
-   }
-   for(const item of items.slice(0,4)){
-    const title=clean(tag(item,'title')); const description=clean(tag(item,'description')); const source=clean(tag(item,'source'))||'Google News'; const published=tag(item,'pubDate'); const link=tag(item,'link');
-    if(title) out.push({topic:f.topic,title,description,published,source,url:link});
+   const endpoint=API_BASE+'/api/headlines'+(sector?'?sector='+encodeURIComponent(sector):'');
+   const response=await fetch(endpoint);
+   if(response.ok){
+    const data=await response.json();
+    if(Array.isArray(data?.headlines))return data.headlines as LiveHeadline[];
    }
   }catch{}
  }
- return out;
+ const groups=await Promise.all(feeds.map(directFeed));
+ return groups.flat();
 }
