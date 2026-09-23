@@ -135,7 +135,7 @@ async function gdeltFeed(f:Feed):Promise<Headline[]>{
  const data=await r.json();
  return (data.articles||[]).map((a:any)=>({
   topic:f.topic,title:clean(a.title||''),description:'',source:clean(a.domain||a.sourcecountry||''),
-  published:a.seendate?String(a.seendate).replace(/(\\d{4})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(\\d{2})/,'$1-$2-$3T$4:$5:$6Z'):'',
+  published:a.seendate?String(a.seendate).replace(/(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/,'$1-$2-$3T$4:$5:$6Z'):'',
   url:a.url||'',sourceVerified:isTrusted(a.url||''),corroborationCount:1,relevanceScore:0
  })).filter((x:Headline)=>x.title&&x.url);
 }
