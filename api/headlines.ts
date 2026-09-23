@@ -146,7 +146,7 @@ async function googleNewsFeed(f:Feed):Promise<Headline[]>{
  const r=await fetch(url,{headers:{Accept:'application/rss+xml,application/xml,text/xml'}});
  if(!r.ok)throw new Error('Google News RSS '+r.status);
  const xml=await r.text();
- const blocks=xml.match(/<item>[\\s\\S]*?<\\/item>/gi)||[];
+ const blocks=xml.match(/<item>[\s\S]*?<\/item>/gi)||[];
  return blocks.slice(0,30).map((block:any)=>{
   const read=(tag:string)=>{const m=block.match(new RegExp('<'+tag+'(?: [^>]*)?>([\\s\\S]*?)<\\/'+tag+'>','i'));return clean((m?.[1]||'').replace(/<!\\[CDATA\\[|\\]\\]>/g,''));};
   const source=read('source');
