@@ -1,5 +1,5 @@
 import React,{useCallback,useEffect,useMemo,useState}from'react';
-import{SafeAreaView,ScrollView,Text,TouchableOpacity,View,StyleSheet,ActivityIndicator,Linking,Image}from'react-native';
+import{SafeAreaView,ScrollView,Text,TouchableOpacity,View,StyleSheet,ActivityIndicator,Linking,Image,Platform}from'react-native';
 import{StatusBar}from'expo-status-bar';
 import*as Speech from'expo-speech';
 import AsyncStorage from'@react-native-async-storage/async-storage';
@@ -14,7 +14,7 @@ const SECTORS=[
 ];
 const PURPLE='#6C3FC5',PURPLE_DARK='#43227F',PURPLE_SOFT='#EEE7FF',BG='#F7F4FB';
 const LOGO_SVG=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 360"><g transform="translate(120 55)"><circle cx="135" cy="125" r="112" fill="#B58ADB" stroke="#43227F" stroke-width="9"/><circle cx="135" cy="125" r="82" fill="none" stroke="#FFF" stroke-width="8"/><path d="M48 206 L116 140 L98 120 L158 72 L150 111 L208 75 L169 133 L194 150 L133 190 L143 158 Z" fill="#FFF" stroke="#43227F" stroke-width="9" stroke-linejoin="round"/><path d="M25 235 L116 142" stroke="#43227F" stroke-width="10" stroke-linecap="round"/><text x="285" y="170" font-family="Arial,Helvetica,sans-serif" font-size="145" font-weight="800" fill="#B58ADB" letter-spacing="2">NOVO</text></g></svg>`;
-const LOGO_URI=`data:image/svg+xml;utf8,${encodeURIComponent(LOGO_SVG)}`;
+const LOGO_URI=Platform.OS==='web'?'/novo-logo.svg':`data:image/svg+xml;utf8,${encodeURIComponent(LOGO_SVG)}`;
 const clean=(s:string)=>s.replace(/\s+/g,' ').trim();
 const strip=(s:string)=>clean(s.replace(/<[^>]*>/g,' '));
 const speechClean=(s:string)=>s.replace(/https?:\/\/\S+/gi,' ').replace(/\bwww\.\S+/gi,' ').replace(/[•●○◉◆◇■□▪▫▶►→←↑↓★☆✓✕×÷|*_#~`]/g,' ').replace(/[()\[\]{}<>]/g,' ').replace(/\s*[-–—]\s*/g,' ').replace(/\s*\/\s*/g,' ').replace(/\s*[:;]\s*/g,'. ').replace(/\s+/g,' ').trim();
