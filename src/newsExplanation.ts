@@ -1,6 +1,6 @@
 import {LiveHeadline} from './liveNews';
 
-export type NewsExplanation={quePaso:string;quien:string;cuando:string;donde:string;porQue:string;comoPaso:string;datosClave:string[];contexto:string;consecuencia:string;aQuienAfecta:string;queSignifica:string;quePuedesHacer:string;};
+export type NewsExplanation={unaFrase:string;loQuePaso10s:string;quePaso:string;quien:string;cuando:string;donde:string;porQue:string;comoPaso:string;datosClave:string[];contexto:string;consecuencia:string;aQuienAfecta:string;queSignifica:string;deberiaImportarte:string;loQueNoSabemos:string;quePuedesHacer:string;};
 
 const clean=(s:string)=>s.replace(/<[^>]*>/g,' ').replace(/&nbsp;/gi,' ').replace(/&amp;/g,'&').replace(/https?:\/\/\S+/gi,' ').replace(/\s+/g,' ').trim();
 const sentence=(s:string)=>s.replace(/[🔴🔵🟢🟡🟠🟣⚫⚪🔺🔻⬇⬆➡⬅]/g,' ').replace(/\s+/g,' ').trim();
@@ -23,6 +23,8 @@ export function explainHeadline(n:LiveHeadline):NewsExplanation{
   const stageText=info.stage?' por '+info.stage:'';
   const eventText=info.event?' en '+info.event:'';
   return{
+   unaFrase:info.teams+' se enfrentan'+stageText+eventText+'.',
+   loQuePaso10s:info.teams+' se enfrentan'+stageText+eventText+'. La publicación informa sobre el partido y ofrece información para seguirlo en vivo.',
    quePaso:info.teams+' se enfrentan'+stageText+eventText+'. La publicación informa sobre el partido y ofrece información para seguirlo en vivo.',
    quien:'Las selecciones de '+parts[0]+' y '+parts[1]+' son las protagonistas del partido.',
    cuando:when,
@@ -34,11 +36,15 @@ export function explainHeadline(n:LiveHeadline):NewsExplanation{
    consecuencia:'El resultado del partido determinará el avance de los equipos en esta instancia de la competencia.',
    aQuienAfecta:'Principalmente a las selecciones participantes y a quienes siguen la competencia.',
    queSignifica:'Es un partido de '+(info.stage||'competencia')+' entre '+info.teams+', dentro de '+(info.event||'la competición mencionada en la noticia')+'.',
+   deberiaImportarte:'Puede interesarte si sigues a alguno de los equipos o esta competencia.',
+   loQueNoSabemos:'La información disponible no permite conocer otros detalles del encuentro.',
    quePuedesHacer:'Si quieres seguir el encuentro, revisa la hora y el medio de transmisión indicados en la publicación.'
   };
  }
  const useful=summary||sentence(clean(n.title));
  return{
+  unaFrase:useful||'La noticia informa sobre un hecho reciente.',
+  loQuePaso10s:useful||'La noticia informa sobre un hecho reciente.',
   quePaso:useful||'La noticia informa sobre un hecho reciente.',
   quien:'Los protagonistas no están claramente identificados en la información disponible.',
   cuando:when,donde:where,
@@ -49,6 +55,8 @@ export function explainHeadline(n:LiveHeadline):NewsExplanation{
   consecuencia:'Las consecuencias específicas no están indicadas en la información disponible.',
   aQuienAfecta:'No se puede determinar con precisión a partir de la información disponible.',
   queSignifica:'La noticia informa sobre '+sentence(clean(n.title)).replace(/[.:]+$/,'')+'.',
+  deberiaImportarte:'Su relevancia para ti depende de tu interés en el tema y de las personas o sectores involucrados.',
+  loQueNoSabemos:'La información disponible no permite determinar más detalles con precisión.',
   quePuedesHacer:'Si necesitas confirmar un detalle específico, consulta la publicación enlazada.'
  };
 }
